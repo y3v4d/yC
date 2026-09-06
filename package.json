@@ -1,0 +1,19 @@
+{
+  "name": "yc",
+  "version": "0.0.0",
+  "description": "Toy c-like language design to compile directly to WebAssembly",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "c",
+    "webassembly",
+    "yc",
+    "language",
+    "javascript"
+  ],
+  "author": "y3v4d",
+  "license": "ISC"
+}

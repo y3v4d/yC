@@ -1,0 +1,26 @@
+struct test_t {
+    i32 a;
+    i32 b;
+}
+
+i32 add(test_t t) {
+    t.a = 10;
+    t.a + 5;
+}
+
+void print_test(test_t t) {
+    print t.a;
+    print t.b;
+}
+
+void main() {
+    test_t yes;
+    yes.a = 5;
+    yes.b = 69;
+
+    i32 a = 0;
+    i32* p = &a;
+
+    print add(yes);
+    print_test(yes);
+}

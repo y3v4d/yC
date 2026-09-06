@@ -1,0 +1,29 @@
+[
+  {
+    "label": "cmake: configure",
+    "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "cmake: build",
+    "command": "cmake --build build -j$(nproc)",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "cmake: clean",
+    "command": "cmake --build build --target clean",
+    "use_new_terminal": false
+  },
+  {
+    "label": "run",
+    "command": "./build/app",
+    "use_new_terminal": false
+  },
+  {
+      "label": "build & run",
+      "command": "cmake --build build -j$(nproc) && ./build/app",
+      "use_new_terminal": false
+  }
+]
