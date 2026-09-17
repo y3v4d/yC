@@ -1,26 +1,73 @@
+struct point_t {
+    i32 x;
+    i32 y;
+}
+
 struct test_t {
     i32 a;
     i32 b;
+    point_t* p;
 }
 
-i32 add(test_t t) {
-    t.a = 10;
-    t.a + 5;
+void print_test(test_t* t) {
+    (*t).b = 100;
+
+    print (*t).a;
+    print (*t).b;
 }
 
-void print_test(test_t t) {
+void print_test2(test_t t) {
+    t.a = 100;
+
+    print (*(&t)).a;
     print t.a;
     print t.b;
 }
 
+void test2(i32* a) {
+    *a = 69;
+}
+
+void test(i32 a) {
+    print &a;
+    test2(&a);
+    print a;
+}
+
+void sum(i32 a, i32 b) {
+    i32 c = a + b;
+
+    print a;
+    print b;
+    print c;
+}
+
 void main() {
-    test_t yes;
-    yes.a = 5;
-    yes.b = 69;
+    test_t x;
+    x.a = 7;
+    x.b = 10;
 
-    i32 a = 0;
-    i32* p = &a;
+    test_t b;
+    b.a = 50;
+    b.b = 10;
 
-    print add(yes);
-    print_test(yes);
+    point_t p;
+    p.x = 20;
+    p.y = 40;
+
+    test_t* y = &x;
+
+    x.a = b.a;
+    x.p = &p;
+
+    (*x.p).x = 69;
+
+    i32 b = 10;
+
+    print x.p;
+    print (*x.p).x;
+
+    print b;
+    test2(&b);
+    print b;
 }
