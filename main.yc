@@ -47,6 +47,17 @@ void main() {
     x.a = 7;
     x.b = 10;
 
+    i32 i = 10;
+
+    while(i) {
+        print i;
+        i = i - 1;
+    }
+
+    for(i32 j = 5; j; j = j - 1) {
+        print j;
+    }
+
     test_t b;
     b.a = 50;
     b.b = 10;
@@ -78,6 +89,7 @@ void main() {
     char c = 'H';
 
     (&c)[0] = 'C';
+    *(text + 1) = 'D';
     putc(c);
 
     puts(text);

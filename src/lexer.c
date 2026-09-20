@@ -2,13 +2,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-typedef struct {
-    const char *start;
-    const char *current;
-
-    int line;
-} lexer_t;
-
 lexer_t lexer;
 
 void lexer_init(const char *source) {
@@ -16,6 +9,9 @@ void lexer_init(const char *source) {
     lexer.current = source;
     lexer.line = 1;
 }
+
+lexer_t lexer_snapshot() { return lexer; }
+void lexer_restore(lexer_t *snapshot) { lexer = *snapshot; }
 
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
 static bool is_alpha(char c) {
@@ -146,6 +142,8 @@ static tokentype_e identifier_type() {
                 return check_keyword(2, 1, "2", TOKEN_F32);
             case '6':
                 return check_keyword(2, 1, "4", TOKEN_F64);
+            case 'o':
+                return check_keyword(2, 1, "r", TOKEN_FOR);
             }
         }
     case 't':
@@ -162,6 +160,8 @@ static tokentype_e identifier_type() {
         return check_keyword(1, 3, "oid", TOKEN_VOID);
     case 'c':
         return check_keyword(1, 3, "har", TOKEN_CHAR);
+    case 'w':
+        return check_keyword(1, 4, "hile", TOKEN_WHILE);
     default:
         return TOKEN_IDENTIFIER;
     }
@@ -257,6 +257,8 @@ token_t lexer_token() {
         return token_create(TOKEN_LBRACKET);
     case ']':
         return token_create(TOKEN_RBRACKET);
+    case '!':
+        return token_create(TOKEN_BANG);
     case '"':
         return token_string();
     case '\'':

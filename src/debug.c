@@ -108,6 +108,15 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_RBRACKET:
         printf("TOKEN_RBRACKET");
         break;
+    case TOKEN_WHILE:
+        printf("TOKEN_WHILE");
+        break;
+    case TOKEN_FOR:
+        printf("TOKEN_FOR");
+        break;
+    case TOKEN_BANG:
+        printf("TOKEN_BANG");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

@@ -59,7 +59,12 @@ typedef enum {
     OP_IF,
     OP_ELSE,
     OP_END,
-    OP_PRINT
+    OP_PRINT,
+    OP_LOOP,
+    OP_BLOCK,
+    OP_JMP,
+    OP_JMPIF,
+    OP_NEGATE
 } optype_e;
 
 typedef struct {
@@ -78,6 +83,7 @@ typedef struct {
         int temp_offset;
         int const_value;
         int var_index;
+        int label_index;
     } as;
 } op_t;
 
@@ -174,6 +180,7 @@ typedef struct {
     int data_offset;
 
     int scope_depth;
+    int loop_counter;
 } compiler_t;
 
 typedef enum {
@@ -215,6 +222,7 @@ static void compiler_init() {
     compiler.temp_max = 0;
     compiler.string_count = 0;
     compiler.data_offset = 0;
+    compiler.loop_counter = 0;
 
     compiler.structdef_count = 0;
     compiler.fundef_count = 0;
@@ -480,6 +488,21 @@ static void print_op(op_t op) {
     case OP_STORE_VAR:
         printf("OP_STORE_VAR\n");
         break;
+    case OP_LOOP:
+        printf("OP_LOOP %d\n", op.as.label_index);
+        break;
+    case OP_BLOCK:
+        printf("OP_BLOCK %d\n", op.as.label_index);
+        break;
+    case OP_JMP:
+        printf("OP_JMP %d\n", op.as.label_index);
+        break;
+    case OP_JMPIF:
+        printf("OP_JMPIF %d\n", op.as.label_index);
+        break;
+    case OP_NEGATE:
+        printf("OP_NEGATE\n");
+        break;
     default:
         printf("UNKNOWN_OP\n");
         break;
@@ -583,9 +606,6 @@ static void materialize_vstack(stackv_t *stackv) {
                        .value_type = stackv->ctype,
                        .offset = stackv->offset,
                        .as.var_index = stackv->as.local - compiler.locals});
-
-            stackv->type &= ~VTYPE_STORAGE;
-            stackv->type |= VTYPE_STACK;
         } else if (isv_stack(stackv->type)) {
             if (stackv->offset > 0) {
                 write_op((op_t){.type = OP_CONST,
@@ -708,23 +728,28 @@ static void unary() {
     stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
     compiler.stack_count--; // Pop the last stack value
 
-    if (!is_numeric_type(last_stackv->ctype)) {
-        error("Operand must be a numeric type.");
-        return;
-    }
-
     materialize_vstack(last_stackv);
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
-    result->type = VTYPE_UNKNOWN;
+    result->type = VTYPE_STACK;
     result->ctype = last_stackv->ctype;
+    result->offset = 0;
 
     switch (op_type) {
     case TOKEN_MINUS:
+        if (!is_numeric_type(last_stackv->ctype)) {
+            error("Unary '-' operator requires a numeric type.");
+            return;
+        }
+
         write_op((op_t){.type = OP_CONST,
                         .value_type = last_stackv->ctype,
                         .as.const_value = -1});
         write_op((op_t){.type = OP_MUL, .value_type = last_stackv->ctype});
+        break;
+    case TOKEN_BANG:
+        result->ctype = TYPE_BOOL;
+        write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
         break;
     default:
         error("Expected a unary operator.");
@@ -1028,7 +1053,8 @@ parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
                        [TOKEN_STRING_LITERAL] = {string, NULL, PREC_NONE},
                        [TOKEN_VOID] = {NULL, NULL, PREC_NONE},
                        [TOKEN_LBRACKET] = {NULL, bracket, PREC_ACCESS},
-                       [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE}};
+                       [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_BANG] = {unary, NULL, PREC_UNARY}};
 
 static parserule_t *get_rule(tokentype_e type) { return &rules[type]; }
 
@@ -1047,6 +1073,8 @@ static void if_statement() {
     consume(TOKEN_LEFT_PAREN, "Expected '(' after 'if'.");
     expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
+
+    materialize_vstack(&compiler.stack[compiler.stack_count - 1]);
 
     write_op((op_t){.type = OP_IF});
 
@@ -1070,6 +1098,98 @@ static void if_statement() {
     }
 
     write_op((op_t){.type = OP_END});
+}
+
+static void while_statement() {
+    consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'.");
+    expression(PREC_ASSIGNMENT);
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
+
+    int loop_label = compiler.loop_counter++;
+    int block_label = compiler.loop_counter++;
+
+    write_op((op_t){.type = OP_LOOP, .as.label_index = loop_label});
+    write_op((op_t){.type = OP_BLOCK, .as.label_index = block_label});
+
+    materialize_vstack(&compiler.stack[compiler.stack_count - 1]);
+
+    write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
+    write_op((op_t){.type = OP_JMPIF, .as.label_index = block_label});
+
+    consume(TOKEN_LEFT_BRACE, "Expected '{' after 'while' condition.");
+
+    begin_scope();
+    block();
+    end_scope();
+
+    write_op((op_t){.type = OP_JMP, .as.label_index = loop_label});
+    write_op((op_t){.type = OP_END});
+    write_op((op_t){.type = OP_END});
+}
+
+static parser_t parser_snapshot() { return parser; }
+
+static void parser_restore(parser_t *snapshot) { parser = *snapshot; }
+
+static void for_statement() {
+    begin_scope();
+    consume(TOKEN_LEFT_PAREN, "Expected '(' after 'for'.");
+
+    if (!check(TOKEN_SEMICOLON)) {
+        declaration();
+    } else {
+        advance(); // Consume the semicolon
+    }
+
+    int loop_label = compiler.loop_counter++;
+    int block_label = compiler.loop_counter++;
+
+    write_op((op_t){.type = OP_LOOP, .as.label_index = loop_label});
+    write_op((op_t){.type = OP_BLOCK, .as.label_index = block_label});
+
+    if (!check(TOKEN_SEMICOLON)) {
+        expression(PREC_ASSIGNMENT);
+    }
+
+    materialize_vstack(&compiler.stack[compiler.stack_count - 1]);
+    write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
+    write_op((op_t){.type = OP_JMPIF, .as.label_index = block_label});
+
+    bool has_inc = false;
+    consume(TOKEN_SEMICOLON, "Expected ';' after loop condition.");
+
+    lexer_t snapshot = lexer_snapshot();
+    parser_t psnapshot = parser_snapshot();
+    if (!check(TOKEN_RIGHT_PAREN)) {
+        has_inc = true;
+        // expression(PREC_ASSIGNMENT);
+        while (!check(TOKEN_RIGHT_PAREN) && !check(TOKEN_EOF)) {
+            advance();
+        }
+    }
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'for' clauses.");
+
+    consume(TOKEN_LEFT_BRACE, "Expected '{' after 'for' clauses.");
+    begin_scope();
+    block();
+    end_scope();
+
+    if (has_inc) {
+        lexer_t now = lexer_snapshot();
+        parser_t psnapshot_now = parser_snapshot();
+
+        lexer_restore(&snapshot);
+        parser_restore(&psnapshot);
+        expression(PREC_ASSIGNMENT);
+        lexer_restore(&now);
+        parser_restore(&psnapshot_now);
+    }
+
+    write_op((op_t){.type = OP_JMP, .as.label_index = loop_label});
+    write_op((op_t){.type = OP_END});
+    write_op((op_t){.type = OP_END});
+
+    end_scope();
 }
 
 static void named_var(type_e type) {
@@ -1322,6 +1442,9 @@ static void function(type_e return_type) {
             }
 
             break;
+        case OP_NEGATE:
+            write_string("i32.eqz\n");
+            break;
         case OP_ADDRESS_VAR: {
             op_t *op = &compiler.ops[i];
             local_t *local = &compiler.locals[op->as.var_index];
@@ -1466,6 +1589,7 @@ static void function(type_e return_type) {
             break;
         case OP_CONVERT: {
             op_t *op = &compiler.ops[i];
+
             if (op->as.convert.from == TYPE_I32 &&
                 op->as.convert.to == TYPE_I64) {
                 write_string("i64.extend_i32_s\n");
@@ -1493,6 +1617,42 @@ static void function(type_e return_type) {
         case OP_END:
             write_string(")\n");
             break;
+        case OP_LOOP: {
+            write_string("(loop $label");
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d",
+                     compiler.ops[i].as.label_index);
+            write_string(buffer);
+            write_string("\n");
+            break;
+        }
+        case OP_BLOCK: {
+            write_string("(block $label");
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d",
+                     compiler.ops[i].as.label_index);
+            write_string(buffer);
+            write_string("\n");
+            break;
+        }
+        case OP_JMP: {
+            write_string("br $label");
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d",
+                     compiler.ops[i].as.label_index);
+            write_string(buffer);
+            write_string("\n");
+            break;
+        }
+        case OP_JMPIF: {
+            write_string("br_if $label");
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d",
+                     compiler.ops[i].as.label_index);
+            write_string(buffer);
+            write_string("\n");
+            break;
+        }
         case OP_PRINT: {
             op_t *op = &compiler.ops[i];
             if (is_pointer(op->value_type)) {
@@ -1598,6 +1758,10 @@ static void declaration() {
             print_statement();
         } else if (match(TOKEN_IF)) {
             if_statement();
+        } else if (match(TOKEN_WHILE)) {
+            while_statement();
+        } else if (match(TOKEN_FOR)) {
+            for_statement();
         } else {
             expression(PREC_ASSIGNMENT);
             consume(TOKEN_SEMICOLON, "Expected ';' after declaration.");
