@@ -9,7 +9,7 @@ A (yet small) list of features that yC currently supports:
 
 - **Hand-written Lexer** - tokenizes the input source code
 - **Hand-written Parser** - Pratt-parser that generates the WAT output directly (without an AST) in a single pass. In most places it first generates an intermidiate representation in form of simple opcodes which are later lowered to WAT. This is done to simplify the code generation and make it easier to add new features and targets in the future.
-- **Static typing** - yC is a statically typed language, meaning that types are checked at compile time. Current primitive types are: i32, i64, f32 (not supported yet), f64 (not supported yet), bool, void (only as a return type for functions)
+- **Static typing** - yC is a statically typed language, meaning that types are checked at compile time. Current primitive types are: i32, i64, f32 (not supported yet), f64 (not supported yet), bool, void (only as a return type for functions), char
 - **Functions** - can be defined and called with parameters
 - **Structs** - user-defined types that can contain multiple fields
 - **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name.
@@ -77,14 +77,11 @@ void main() {
 - Add better error handling and reporting
 - Add better scoping support - currently scopes are only partially supported and there might be some weird bugs related to them
 - Add loops - while and for
-- Add strings
 - Add support for f32 and f64 primitive types
 - Add support for i8 and i16 primitive types
 - Add support for unsigned integer types (u8, u16, u32, u64)
 - Add support for arrays
-- Add support for strings
 - Add support for function pointers
-- Add support for passing structs by pointers
 - Add support for explicit type casting
 - Add support for heap memory allocation (malloc, free)
 - Add binary operation support

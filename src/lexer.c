@@ -91,6 +91,39 @@ static token_t token_number() {
     return token_create(TOKEN_NUMBER);
 }
 
+static token_t token_character() {
+    if (peek() == '\\') {
+        advance(); // consume the '\'
+        if (peek() == 'n' || peek() == 't' || peek() == '\\' ||
+            peek() == '\'') {
+            advance(); // consume the escape character
+        } else {
+            return token_create(TOKEN_ERROR); // invalid escape sequence
+        }
+    } else {
+        advance(); // consume the character
+    }
+
+    advance(); // consume the closing '
+    return token_create(TOKEN_CHAR_LITERAL);
+}
+
+static token_t token_string() {
+    while (peek() != '"' && !is_at_end()) {
+        if (peek() == '\n') {
+            lexer.line++;
+        }
+        advance();
+    }
+
+    if (is_at_end()) {
+        return token_create(TOKEN_ERROR); // Unterminated string
+    }
+
+    advance(); // Consume the closing "
+    return token_create(TOKEN_STRING_LITERAL);
+}
+
 static tokentype_e identifier_type() {
     switch (lexer.start[0]) {
     case 'i':
@@ -127,6 +160,8 @@ static tokentype_e identifier_type() {
         return check_keyword(1, 5, "truct", TOKEN_STRUCT);
     case 'v':
         return check_keyword(1, 3, "oid", TOKEN_VOID);
+    case 'c':
+        return check_keyword(1, 3, "har", TOKEN_CHAR);
     default:
         return TOKEN_IDENTIFIER;
     }
@@ -218,6 +253,14 @@ token_t lexer_token() {
         return token_create(TOKEN_AMPERSAND);
     case '.':
         return token_create(TOKEN_DOT);
+    case '[':
+        return token_create(TOKEN_LBRACKET);
+    case ']':
+        return token_create(TOKEN_RBRACKET);
+    case '"':
+        return token_string();
+    case '\'':
+        return token_character();
     default:
         return token_create(TOKEN_ERROR);
     }

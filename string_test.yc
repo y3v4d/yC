@@ -1,0 +1,17 @@
+void main() {
+    char* s = "Hello ";
+    char* n = "World!";
+    char y = 'J';
+    i32 i = 2;
+    char *z = &y;
+
+    s[i] = 'j';
+
+    putc(s[i]);
+    putc(y);
+
+    puts(s);
+    puts(n);
+
+    puts("What's up?");
+}

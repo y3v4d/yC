@@ -29,6 +29,7 @@ typedef enum {
     TYPE_I64,
     TYPE_F32,
     TYPE_F64,
+    TYPE_CHAR,
     TYPE_STRUCT,
     TYPE_FUN,
 
@@ -138,6 +139,11 @@ typedef struct {
 } stackv_t;
 
 typedef struct {
+    const char *start;
+    int length;
+} constchar_t;
+
+typedef struct {
     op_t *ops;
     int op_count;
     int op_capcity;
@@ -161,6 +167,11 @@ typedef struct {
 
     local_t to_hoist[256];
     int hoist;
+
+    constchar_t strings[256];
+    int string_count;
+
+    int data_offset;
 
     int scope_depth;
 } compiler_t;
@@ -200,6 +211,10 @@ static void compiler_init() {
     compiler.stack_count = 0;
     compiler.scope_depth = 0;
     compiler.hoist = 0;
+
+    compiler.temp_max = 0;
+    compiler.string_count = 0;
+    compiler.data_offset = 0;
 
     compiler.structdef_count = 0;
     compiler.fundef_count = 0;
@@ -289,6 +304,9 @@ static type_e token_to_type(tokentype_e type, bool is_pointer) {
     case TOKEN_VOID:
         base_type = TYPE_VOID;
         break;
+    case TOKEN_CHAR:
+        base_type = TYPE_CHAR;
+        break;
     default:
         return TYPE_UNKNOWN;
     }
@@ -329,6 +347,8 @@ static int get_type_size(type_e type) {
         return 4;
     case TYPE_F64:
         return 8;
+    case TYPE_CHAR:
+        return 1;
     case TYPE_BOOL:
         return 4; // Assuming bool is represented as i32
     case TYPE_STRUCT: {
@@ -363,6 +383,7 @@ static type_e match_type() {
     case TOKEN_F32:
     case TOKEN_F64:
     case TOKEN_BOOL:
+    case TOKEN_CHAR:
         matched_primitive = true;
         break;
     default:
@@ -499,6 +520,9 @@ static void write_type(type_e type) {
         write_string(
             "i32"); // Representing structs as i32 (pointer) in WebAssembly
         break;
+    case TYPE_CHAR:
+        write_string("i32"); // Representing char as i32 in WebAssembly
+        break;
     default:
         error("Expected a primitive type.");
         break;
@@ -537,25 +561,31 @@ static void materialize_vstack(stackv_t *stackv) {
                 write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
             }
 
-            if (is_struct(stackv->ctype)) {
-                // for struct types the address it the value, we just leave the
-                // address on the stack
-                return;
+            // for struct types the address it the value, we just leave the
+            // address on the stack
+            if (!is_struct(stackv->ctype)) {
+                write_op((op_t){.type = OP_LOAD, .value_type = stackv->ctype});
             }
-
-            write_op((op_t){.type = OP_LOAD, .value_type = stackv->ctype});
         }
+
+        stackv->type &= ~VTYPE_LVALUE;
     } else {
         if (isv_const(stackv->type)) {
             write_op((op_t){.type = OP_CONST,
                             .value_type = stackv->ctype,
                             .as.const_value = stackv->as.const_value});
+
+            stackv->type &= ~VTYPE_STORAGE;
+            stackv->type |= VTYPE_STACK;
         } else if (isv_local(stackv->type)) {
             write_op(
                 (op_t){.type = OP_ADDRESS_VAR,
                        .value_type = stackv->ctype,
                        .offset = stackv->offset,
                        .as.var_index = stackv->as.local - compiler.locals});
+
+            stackv->type &= ~VTYPE_STORAGE;
+            stackv->type |= VTYPE_STACK;
         } else if (isv_stack(stackv->type)) {
             if (stackv->offset > 0) {
                 write_op((op_t){.type = OP_CONST,
@@ -638,17 +668,17 @@ static void binary() {
 
     expression((prec_e)(precedence + 1));
 
-    stackv_t *a = &compiler.stack[compiler.stack_count - 1];
-    stackv_t *b = &compiler.stack[compiler.stack_count - 2];
+    stackv_t *a = &compiler.stack[compiler.stack_count - 2];
+    stackv_t *b = &compiler.stack[compiler.stack_count - 1];
     compiler.stack_count -= 2;
 
     materialize_vstack(a);
     materialize_vstack(b);
 
-    type_e target_type = is_pointer(a->ctype) ? TYPE_I32 : a->ctype;
+    type_e target_type = is_pointer(b->ctype) ? b->ctype : a->ctype;
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
-    result->type = VTYPE_UNKNOWN;
+    result->type = VTYPE_STACK;
     result->ctype = target_type;
 
     switch (op_type) {
@@ -918,36 +948,87 @@ static void assignment() {
     store_vstack(last_stackv);
 }
 
-parserule_t rules[] = {
-    [TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
-    [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
-    [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
-    [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
-    [TOKEN_MINUS] = {unary, binary, PREC_TERM},
-    [TOKEN_STAR] = {dereference, binary, PREC_FACTOR},
-    [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
-    [TOKEN_IDENTIFIER] = {identifier, NULL, PREC_NONE},
-    [TOKEN_AMPERSAND] = {address, NULL, PREC_NONE},
-    [TOKEN_I32] = {NULL, NULL, PREC_NONE},
-    [TOKEN_I64] = {NULL, NULL, PREC_NONE},
-    [TOKEN_F32] = {NULL, NULL, PREC_NONE},
-    [TOKEN_F64] = {NULL, NULL, PREC_NONE},
-    [TOKEN_IF] = {NULL, NULL, PREC_NONE},
-    [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
-    [TOKEN_SEMICOLON] = {NULL, NULL, PREC_NONE},
-    [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
-    [TOKEN_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
-    [TOKEN_BOOL] = {NULL, NULL, PREC_NONE},
-    [TOKEN_TRUE] = {boolean, NULL, PREC_NONE},
-    [TOKEN_FALSE] = {boolean, NULL, PREC_NONE},
-    [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
-    [TOKEN_STRUCT] = {NULL, NULL, PREC_NONE},
-    [TOKEN_DOT] = {NULL, dot, PREC_ACCESS},
-};
+static void character() {
+    stackv_t *stackv = &compiler.stack[compiler.stack_count++];
+    stackv->type = VTYPE_CONST;
+    stackv->ctype = TYPE_CHAR;
+
+    char c = parser.previous.start[1];
+    stackv->as.const_value = (int)c;
+}
+
+static void string() {
+    stackv_t *stackv = &compiler.stack[compiler.stack_count++];
+    stackv->type = VTYPE_CONST;
+    stackv->ctype = TYPE_CHAR | TYPE_POINTER_FLAG;
+
+    int string_index = compiler.string_count++;
+    compiler.strings[string_index].start = parser.previous.start + 1;
+    compiler.strings[string_index].length = parser.previous.length - 2;
+
+    stackv->as.const_value = 16384 + compiler.data_offset;
+    compiler.data_offset += compiler.strings[string_index].length + 1;
+}
+
+static void bracket() {
+    stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
+    type_e element_type = last_stackv->ctype;
+    if (!is_pointer(last_stackv->ctype)) {
+        error("Cannot index a non-pointer type.");
+        return;
+    }
+
+    materialize_vstack(last_stackv);
+
+    expression(PREC_ASSIGNMENT);
+    consume(TOKEN_RBRACKET, "Expected ']' after index expression.");
+
+    stackv_t *index_stackv = &compiler.stack[compiler.stack_count - 1];
+    if (!is_numeric_type(index_stackv->ctype)) {
+        error("Index must be a numeric type.");
+        return;
+    }
+
+    materialize_vstack(index_stackv);
+    write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
+
+    index_stackv->ctype = element_type & ~TYPE_POINTER_FLAG;
+    index_stackv->type |= VTYPE_LVALUE;
+}
+
+parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
+                       [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
+                       [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
+                       [TOKEN_MINUS] = {unary, binary, PREC_TERM},
+                       [TOKEN_STAR] = {dereference, binary, PREC_FACTOR},
+                       [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
+                       [TOKEN_IDENTIFIER] = {identifier, NULL, PREC_NONE},
+                       [TOKEN_AMPERSAND] = {address, NULL, PREC_NONE},
+                       [TOKEN_I32] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_I64] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_F32] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_F64] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_IF] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_SEMICOLON] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
+                       [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_BOOL] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_TRUE] = {boolean, NULL, PREC_NONE},
+                       [TOKEN_FALSE] = {boolean, NULL, PREC_NONE},
+                       [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_STRUCT] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_DOT] = {NULL, dot, PREC_ACCESS},
+                       [TOKEN_CHAR_LITERAL] = {character, NULL, PREC_NONE},
+                       [TOKEN_STRING_LITERAL] = {string, NULL, PREC_NONE},
+                       [TOKEN_VOID] = {NULL, NULL, PREC_NONE},
+                       [TOKEN_LBRACKET] = {NULL, bracket, PREC_ACCESS},
+                       [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE}};
 
 static parserule_t *get_rule(tokentype_e type) { return &rules[type]; }
 
@@ -1191,26 +1272,36 @@ static void function(type_e return_type) {
 
             break;
         }
-        case OP_ADD:
-            if (compiler.ops[i].value_type == TYPE_I64) {
+        case OP_ADD: {
+            op_t *op = &compiler.ops[i];
+
+            if (is_pointer(op->value_type)) {
+                write_string("i32.add\n");
+            } else if (is_type(op->value_type, TYPE_I64)) {
                 write_string("i64.add\n");
-            } else if (compiler.ops[i].value_type == TYPE_I32) {
+            } else if (is_type(op->value_type, TYPE_I32)) {
                 write_string("i32.add\n");
             } else {
                 error("Unsupported type for addition.");
             }
 
             break;
-        case OP_SUB:
-            if (compiler.ops[i].value_type == TYPE_I64) {
+        }
+        case OP_SUB: {
+            op_t *op = &compiler.ops[i];
+
+            if (is_pointer(op->value_type)) {
+                write_string("i32.sub\n");
+            } else if (is_type(op->value_type, TYPE_I64)) {
                 write_string("i64.sub\n");
-            } else if (compiler.ops[i].value_type == TYPE_I32) {
+            } else if (is_type(op->value_type, TYPE_I32)) {
                 write_string("i32.sub\n");
             } else {
                 error("Unsupported type for subtraction.");
             }
 
             break;
+        }
         case OP_MUL:
             if (compiler.ops[i].value_type == TYPE_I64) {
                 write_string("i64.mul\n");
@@ -1280,7 +1371,12 @@ static void function(type_e return_type) {
                 write_string("memory.copy\n");
             } else if (local->is_on_stack || is_local_struct) {
                 write_type(op->value_type);
-                write_string(".store\n");
+
+                if (is_type(op->value_type, TYPE_CHAR)) {
+                    write_string(".store8\n");
+                } else {
+                    write_string(".store\n");
+                }
             } else {
                 write_string("local.set $");
                 write_token(local->name);
@@ -1307,8 +1403,13 @@ static void function(type_e return_type) {
                 write_string(".load\n");
             } else if (local->is_on_stack) {
                 write_string(";; Load variable from stack\n");
+
                 write_type(op->value_type);
-                write_string(".load\n");
+                if (is_type(op->value_type, TYPE_CHAR)) {
+                    write_string(".load8_u\n");
+                } else {
+                    write_string(".load\n");
+                }
             } else {
                 write_string("local.get $");
                 write_token(local->name);
@@ -1324,7 +1425,12 @@ static void function(type_e return_type) {
                 // do anything here
             } else {
                 write_type(compiler.ops[i].value_type);
-                write_string(".load\n");
+
+                if (is_type(compiler.ops[i].value_type, TYPE_CHAR)) {
+                    write_string(".load8_u\n");
+                } else {
+                    write_string(".load\n");
+                }
             }
             break;
         case OP_STORE: {
@@ -1340,7 +1446,12 @@ static void function(type_e return_type) {
                 write_string("memory.copy\n");
             } else {
                 write_type(compiler.ops[i].value_type);
-                write_string(".store\n");
+
+                if (is_type(compiler.ops[i].value_type, TYPE_CHAR)) {
+                    write_string(".store8\n");
+                } else {
+                    write_string(".store\n");
+                }
             }
 
             break;
@@ -1498,14 +1609,80 @@ static void module() {
     write_string("(module\n");
     write_string("(import \"core\" \"print\" (func $print_i32 (param i32)))\n");
     write_string("(import \"core\" \"print\" (func $print_i64 (param i64)))\n");
-    write_string("(global $__sp (mut i32) (i32.const 16384))\n");
+    write_string("(import \"core\" \"putc\" (func $putc (param i32)))\n");
+    write_string("(import \"core\" \"puts\" (func $puts (param i32)))\n");
     write_string("(memory $0 1)\n");
+
+    // create local for putc
+    local_t *putc_local = &compiler.locals[compiler.local_count++];
+    putc_local->name.start = "putc";
+    putc_local->name.length = 4;
+    putc_local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
+    putc_local->is_on_stack = false;
+    putc_local->depth = 0;
+
+    fundef_t *putc_fundef = &compiler.fundefs[compiler.fundef_count++];
+    putc_fundef->name.start = "putc";
+    putc_fundef->name.length = 4;
+    putc_fundef->return_type = TYPE_VOID;
+    putc_fundef->param_count = 1;
+    putc_fundef->params = (fielddef_t *)malloc(sizeof(fielddef_t));
+    putc_fundef->params[0].name.start = "c";
+    putc_fundef->params[0].name.length = 1;
+    putc_fundef->params[0].type = TYPE_I32;
+
+    // create local for puts
+    local_t *puts_local = &compiler.locals[compiler.local_count++];
+    puts_local->name.start = "puts";
+    puts_local->name.length = 4;
+    puts_local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
+    puts_local->is_on_stack = false;
+    puts_local->depth = 0;
+
+    fundef_t *puts_fundef = &compiler.fundefs[compiler.fundef_count++];
+    puts_fundef->name.start = "puts";
+    puts_fundef->name.length = 4;
+    puts_fundef->return_type = TYPE_VOID;
+    puts_fundef->param_count = 1;
+    puts_fundef->params = (fielddef_t *)malloc(sizeof(fielddef_t) * 1);
+    puts_fundef->params[0].name.start = "ptr";
+    puts_fundef->params[0].name.length = 3;
+    puts_fundef->params[0].type = TYPE_I32;
 
     while (parser.current.type != TOKEN_EOF) {
         declaration();
     }
 
-    write_string("(start $main)\n");
+    write_string("(global $__sp (mut i32) (i32.const 16384))\n");
+
+    int data_offset = 0;
+    for (int i = 0; i < compiler.string_count; i++) {
+        constchar_t *str = &compiler.strings[i];
+        write_string("(data (i32.const ");
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%d", 16384 + data_offset);
+        write_string(buffer);
+
+        write_string(") \"");
+        for (int j = 0; j < str->length; j++) {
+            char c = str->start[j];
+            if (c == '"' || c == '\\') {
+                write_string((char[]){c, '\0'});
+            } else if (c >= 32 && c <= 126) {
+                write_string((char[]){c, '\0'});
+            } else {
+                snprintf(buffer, sizeof(buffer), "\\%02x", (unsigned char)c);
+                write_string(buffer);
+            }
+        }
+        write_string("\\00\")\n");
+
+        data_offset += str->length + 1;
+    }
+
+    // write_string("(start $main)\n");
+    write_string("(export \"memory\" (memory $0))\n");
+    write_string("(export \"main\" (func $main))\n");
     write_string(")");
 }
 

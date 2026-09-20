@@ -1,4 +1,5 @@
 #include "debug.h"
+#include "lexer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -88,6 +89,24 @@ static void print_token_type(tokentype_e type) {
         break;
     case TOKEN_DOT:
         printf("TOKEN_DOT");
+        break;
+    case TOKEN_CHAR:
+        printf("TOKEN_CHAR");
+        break;
+    case TOKEN_VOID:
+        printf("TOKEN_VOID");
+        break;
+    case TOKEN_CHAR_LITERAL:
+        printf("TOKEN_CHAR_LITERAL");
+        break;
+    case TOKEN_STRING_LITERAL:
+        printf("TOKEN_STRING_LITERAL");
+        break;
+    case TOKEN_LBRACKET:
+        printf("TOKEN_LBRACKET");
+        break;
+    case TOKEN_RBRACKET:
+        printf("TOKEN_RBRACKET");
         break;
     default:
         printf("UNKNOWN_TOKEN");

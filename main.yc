@@ -17,7 +17,7 @@ void print_test(test_t* t) {
 }
 
 void print_test2(test_t t) {
-    t.a = 100;
+    t.a = 120;
 
     print (*(&t)).a;
     print t.a;
@@ -61,6 +61,9 @@ void main() {
     x.p = &p;
 
     (*x.p).x = 69;
+    print_test(&x);
+    print_test2(x);
+    print x.a;
 
     i32 b = 10;
 
@@ -70,4 +73,19 @@ void main() {
     print b;
     test2(&b);
     print b;
+
+    char* text = "Julcia";
+    char c = 'H';
+
+    (&c)[0] = 'C';
+    putc(c);
+
+    puts(text);
+    text[5] = 'o';
+    puts(text);
+
+    *text = 'B';
+    puts(text);
+
+    putc(*(text));
 }
