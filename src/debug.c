@@ -117,6 +117,9 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_BANG:
         printf("TOKEN_BANG");
         break;
+    case TOKEN_RETURN:
+        printf("TOKEN_RETURN");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

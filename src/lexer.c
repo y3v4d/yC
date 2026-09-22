@@ -162,6 +162,8 @@ static tokentype_e identifier_type() {
         return check_keyword(1, 3, "har", TOKEN_CHAR);
     case 'w':
         return check_keyword(1, 4, "hile", TOKEN_WHILE);
+    case 'r':
+        return check_keyword(1, 5, "eturn", TOKEN_RETURN);
     default:
         return TOKEN_IDENTIFIER;
     }

@@ -1,103 +1,29 @@
-struct point_t {
-    i32 x;
-    i32 y;
-}
+i32* bump_pointer = &__heap_base;
+char* malloc(i32 n) {
+    i32* r = bump_pointer;
+    bump_pointer = bump_pointer + n;
 
-struct test_t {
-    i32 a;
-    i32 b;
-    point_t* p;
-}
-
-void print_test(test_t* t) {
-    (*t).b = 100;
-
-    print (*t).a;
-    print (*t).b;
-}
-
-void print_test2(test_t t) {
-    t.a = 120;
-
-    print (*(&t)).a;
-    print t.a;
-    print t.b;
-}
-
-void test2(i32* a) {
-    *a = 69;
-}
-
-void test(i32 a) {
-    print &a;
-    test2(&a);
-    print a;
-}
-
-void sum(i32 a, i32 b) {
-    i32 c = a + b;
-
-    print a;
-    print b;
-    print c;
+    return r;
 }
 
 void main() {
-    test_t x;
-    x.a = 7;
-    x.b = 10;
+    char* test = malloc(10);
+    i32* testi = malloc(8);
+    char* test2 = malloc(4);
 
-    i32 i = 10;
+    testi[0] = 5;
+    testi[1] = 10;
 
-    while(i) {
-        print i;
-        i = i - 1;
-    }
+    test2[0] = 'H';
+    test2[1] = 'e';
+    test2[2] = 'y';
+    test2[3] = '!';
+    test2[4] = 0;
 
-    for(i32 j = 5; j; j = j - 1) {
-        print j;
-    }
-
-    test_t b;
-    b.a = 50;
-    b.b = 10;
-
-    point_t p;
-    p.x = 20;
-    p.y = 40;
-
-    test_t* y = &x;
-
-    x.a = b.a;
-    x.p = &p;
-
-    (*x.p).x = 69;
-    print_test(&x);
-    print_test2(x);
-    print x.a;
-
-    i32 b = 10;
-
-    print x.p;
-    print (*x.p).x;
-
-    print b;
-    test2(&b);
-    print b;
-
-    char* text = "Julcia";
-    char c = 'H';
-
-    (&c)[0] = 'C';
-    *(text + 1) = 'D';
-    putc(c);
-
-    puts(text);
-    text[5] = 'o';
-    puts(text);
-
-    *text = 'B';
-    puts(text);
-
-    putc(*(text));
+    print test;
+    print testi;
+    print *testi;
+    print *(testi + 4);
+    print testi[1];
+    puts(test2);
 }

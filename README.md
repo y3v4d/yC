@@ -15,6 +15,7 @@ A (yet small) list of features that yC currently supports:
 - **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name.
 - **Basic flow control** - if/else statements, for and while loops
 - **Structs** - user-defined types that can contain multiple fields. Structs as function parameters currently are only supported to be passed by value (utilizing similar copy mechanism C uses).
+- **Arrays** - C-like arrays, where every pointer is an array of elements of the same type, accessible through pointer arithmetic, ex. `*(p + 1)` or bracket notation `p[1]`. There are no bounds checks or fixed sized arrays (yet).
 - **Shadow stack** - stack implemented in WebAssembly linear memory, used for storing variables. When possible the compiler will try to use WebAssembly's native local variables instead of the shadow stack, but all structs and addressed variables will be stored on the shadow stack. Currently, the allocated memory for shadow stack is 4kb and is not configurable. In the future I plan to add support for specifying the size of the shadow stack on compilation time.
 - **Variable hoisting** - variables can be declared anywhere in the scope, but they will be always hoisted to the top of the running function. This is done due to necessity because WebAssembly local variables must be declared at the top of the function. Compiler should disallow using variables declared in an inner scope (like if statement) in an outer scope, but that's not fully implemented yet and trying to use such variable might result in undefined behavior.
 - **Built-in statements** - print statement for printing values (currently supported i32, i64) to the console. It's done through importing a function from the host environment (in this case Node.js). In the future I plan to add support for more built-in statements and functions, like reading input from the console, file I/O, etc.
@@ -79,13 +80,13 @@ void main() {
 - Add support for f32 and f64 primitive types
 - Add support for i8 and i16 primitive types
 - Add support for unsigned integer types (u8, u16, u32, u64)
-- Add support for arrays
 - Add support for function pointers
 - Add support for explicit type casting
-- Add support for heap memory allocation (malloc, free)
 - Add binary operation support
 - Add support for constructors/destructors for structs (C++ like)
 - Add support for modules and imports/exports
+- Add unit tests for the compiler
+- Add a standard library
 - Self-hosting
 
 ## References

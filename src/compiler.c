@@ -17,8 +17,9 @@ typedef struct {
 
 // 32-bit layout for type
 // [0..5] - enum type
-// [6] - lvalue flag
-// [7] - pointer flag
+// [6] - pointer flag
+// [7] - absolute flag - frame_index is absolute instead of relative to current
+// frame pointer
 // [8-31] - data (TYPE_STRUCT - index, other - unspecified)
 
 typedef enum {
@@ -33,8 +34,8 @@ typedef enum {
     TYPE_STRUCT,
     TYPE_FUN,
 
-    TYPE_LVALUE_FLAG = 0b01000000,
-    TYPE_POINTER_FLAG = 0b10000000,
+    TYPE_POINTER_FLAG = 0b01000000,
+    TYPE_ABSOLUTE_FLAG = 0b10000000,
 
     TYPE_BASE_MASK = 0b00111111,
     TYPE_DATA_MASK = 0xFFFFFF00,
@@ -91,8 +92,6 @@ typedef struct {
     token_t name;
     type_e type;
 
-    int structdef_index;
-
     bool is_on_stack;
     bool is_param;
 
@@ -145,9 +144,17 @@ typedef struct {
 } stackv_t;
 
 typedef struct {
-    const char *start;
-    int length;
-} constchar_t;
+    type_e type;
+    bool is_local;
+    int offset;
+    int size;
+
+    union {
+        int const_value;
+        const char *string;
+        local_t *local;
+    } as;
+} const_t;
 
 typedef struct {
     op_t *ops;
@@ -171,16 +178,14 @@ typedef struct {
     fundef_t fundefs[256];
     int fundef_count;
 
-    local_t to_hoist[256];
-    int hoist;
-
-    constchar_t strings[256];
-    int string_count;
+    const_t consts[256];
+    int const_count;
 
     int data_offset;
 
     int scope_depth;
     int loop_counter;
+    bool no_op;
 } compiler_t;
 
 typedef enum {
@@ -217,10 +222,10 @@ static void compiler_init() {
     compiler.local_count = 0;
     compiler.stack_count = 0;
     compiler.scope_depth = 0;
-    compiler.hoist = 0;
+    compiler.no_op = false;
 
     compiler.temp_max = 0;
-    compiler.string_count = 0;
+    compiler.const_count = 0;
     compiler.data_offset = 0;
     compiler.loop_counter = 0;
 
@@ -325,6 +330,7 @@ static bool is_type(type_e type, type_e check) {
 }
 
 static bool is_pointer(type_e type) { return (type & TYPE_POINTER_FLAG); }
+static bool is_absolute(type_e type) { return (type & TYPE_ABSOLUTE_FLAG); }
 
 static bool is_struct(type_e type) {
     return is_type(type, TYPE_STRUCT) && !is_pointer(type);
@@ -422,6 +428,10 @@ static type_e match_type() {
 }
 
 static void write_op(op_t op) {
+    if (compiler.no_op) {
+        return;
+    }
+
     if (compiler.op_count >= compiler.op_capcity) {
         compiler.op_capcity =
             compiler.op_capcity < 8 ? 8 : compiler.op_capcity * 2;
@@ -433,6 +443,10 @@ static void write_op(op_t op) {
 }
 
 static void print_op(op_t op) {
+    if (compiler.no_op) {
+        return;
+    }
+
     switch (op.type) {
     case OP_ADD:
         printf("OP_ADD\n");
@@ -985,12 +999,16 @@ static void string() {
     stackv->type = VTYPE_CONST;
     stackv->ctype = TYPE_CHAR | TYPE_POINTER_FLAG;
 
-    int string_index = compiler.string_count++;
-    compiler.strings[string_index].start = parser.previous.start + 1;
-    compiler.strings[string_index].length = parser.previous.length - 2;
+    const_t *string_const = &compiler.consts[compiler.const_count++];
+
+    string_const->is_local = false;
+    string_const->type = TYPE_CHAR | TYPE_POINTER_FLAG;
+    string_const->offset = compiler.data_offset;
+    string_const->size = parser.previous.length - 2;
+    string_const->as.string = parser.previous.start + 1;
 
     stackv->as.const_value = 16384 + compiler.data_offset;
-    compiler.data_offset += compiler.strings[string_index].length + 1;
+    compiler.data_offset += string_const->size + 1;
 }
 
 static void bracket() {
@@ -1013,6 +1031,11 @@ static void bracket() {
     }
 
     materialize_vstack(index_stackv);
+    write_op((op_t){.type = OP_CONST,
+                    .value_type = TYPE_I32,
+                    .as.const_value =
+                        get_type_size(element_type & ~TYPE_POINTER_FLAG)});
+    write_op((op_t){.type = OP_MUL, .value_type = TYPE_I32});
     write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
 
     index_stackv->ctype = element_type & ~TYPE_POINTER_FLAG;
@@ -1192,6 +1215,7 @@ static void for_statement() {
 
 static void named_var(type_e type) {
     token_t name = parser.previous;
+    bool is_global = compiler.scope_depth == 0;
 
     local_t *local = &compiler.locals[compiler.local_count];
     local->name = name;
@@ -1201,6 +1225,45 @@ static void named_var(type_e type) {
     local->depth = compiler.scope_depth;
 
     compiler.local_count++;
+
+    if (is_global) {
+        local->type |= TYPE_ABSOLUTE_FLAG;
+        local->is_on_stack = true;
+        local->frame_index = 16384 + compiler.data_offset;
+
+        const_t *global_const = &compiler.consts[compiler.const_count++];
+        global_const->type = type;
+        global_const->is_local = false;
+        global_const->offset = compiler.data_offset;
+        global_const->size = get_type_size(type);
+
+        compiler.data_offset += global_const->size;
+
+        if (match(TOKEN_EQUAL)) {
+            expression(PREC_ASSIGNMENT);
+
+            stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
+            compiler.stack_count--; // Pop the last stack value
+
+            if (isv_lvalue(last_stackv->type)) {
+                error("Cannot assign an lvalue to a global variable.");
+                return;
+            }
+
+            if (isv_local(last_stackv->type)) {
+                global_const->is_local = true;
+                global_const->as.local = last_stackv->as.local;
+            } else if (isv_const(last_stackv->type)) {
+                global_const->as.const_value = last_stackv->as.const_value;
+            } else {
+                error(
+                    "Cannot assign a non-constant value to a global variable.");
+                return;
+            }
+        }
+
+        return;
+    }
 
     if (match(TOKEN_EQUAL)) {
         write_op((op_t){.type = OP_ADDRESS_VAR,
@@ -1236,9 +1299,11 @@ static void function(type_e return_type) {
     local->depth = compiler.scope_depth;
     compiler.local_count++;
 
-    write_string("(func $");
-    write_token(name);
-    write_string(" ");
+    if (!compiler.no_op) {
+        write_string("(func $");
+        write_token(name);
+        write_string(" ");
+    }
 
     compiler.temp_max = 0;
     int frame_ptr = compiler.local_count;
@@ -1255,11 +1320,13 @@ static void function(type_e return_type) {
             consume(TOKEN_IDENTIFIER, "Expected parameter name.");
             token_t param_name = parser.previous;
 
-            write_string("(param $");
-            write_token(param_name);
-            write_string(" ");
-            write_type(param_type);
-            write_string(")");
+            if (!compiler.no_op) {
+                write_string("(param $");
+                write_token(param_name);
+                write_string(" ");
+                write_type(param_type);
+                write_string(")");
+            }
 
             local_t *local = &compiler.locals[compiler.local_count];
             local->name = param_name;
@@ -1288,13 +1355,15 @@ static void function(type_e return_type) {
         fundef->params[i].type = param_local->type;
     }
 
-    if (return_type != TYPE_VOID) {
-        write_string(" (result ");
-        write_type(return_type);
-        write_string(")");
-    }
+    if (!compiler.no_op) {
+        if (return_type != TYPE_VOID) {
+            write_string(" (result ");
+            write_type(return_type);
+            write_string(")");
+        }
 
-    write_string("\n");
+        write_string("\n");
+    }
 
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function parameters.");
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
@@ -1302,6 +1371,10 @@ static void function(type_e return_type) {
     begin_scope();
     block();
     end_scope();
+
+    if (compiler.no_op) {
+        return;
+    }
 
     int stack_length = 0;
     for (int i = compiler.local_count - 1; i >= frame_ptr; --i) {
@@ -1448,7 +1521,13 @@ static void function(type_e return_type) {
             local_t *local = &compiler.locals[op->as.var_index];
             int offset = op->offset;
 
-            if (local->is_on_stack) {
+            if (is_absolute(local->type)) {
+                write_string(";; Get address of absolute variable\n");
+                write_string("i32.const ");
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%d\n", local->frame_index);
+                write_string(buffer);
+            } else if (local->is_on_stack) {
                 write_string(";; Get address of variable on stack\n");
                 write_string("global.get $__sp\n");
 
@@ -1655,9 +1734,9 @@ static void function(type_e return_type) {
             op_t *op = &compiler.ops[i];
             if (is_pointer(op->value_type)) {
                 write_string("call $print_i32\n");
-            } else if (op->value_type == TYPE_I32) {
+            } else if (is_type(op->value_type, TYPE_I32)) {
                 write_string("call $print_i32\n");
-            } else if (op->value_type == TYPE_I64) {
+            } else if (is_type(op->value_type, TYPE_I64)) {
                 write_string("call $print_i64\n");
             } else {
                 error("Unsupported type for print.");
@@ -1744,6 +1823,16 @@ static void struct_declaration() {
     consume(TOKEN_RIGHT_BRACE, "Expected '}' after struct fields.");
 }
 
+static void return_statement() {
+    expression(PREC_ASSIGNMENT);
+    consume(TOKEN_SEMICOLON, "Expected ';' after return statement.");
+
+    stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
+    compiler.stack_count--; // Pop the last stack value
+
+    materialize_vstack(last_stackv);
+}
+
 static void declaration() {
     type_e decl_type;
 
@@ -1760,6 +1849,8 @@ static void declaration() {
             while_statement();
         } else if (match(TOKEN_FOR)) {
             for_statement();
+        } else if (match(TOKEN_RETURN)) {
+            return_statement();
         } else {
             expression(PREC_ASSIGNMENT);
             consume(TOKEN_SEMICOLON, "Expected ';' after declaration.");
@@ -1811,36 +1902,98 @@ static void module() {
     puts_fundef->params[0].name.length = 3;
     puts_fundef->params[0].type = TYPE_I32;
 
+    local_t *heap_base_local = &compiler.locals[compiler.local_count++];
+    heap_base_local->name.start = "__heap_base";
+    heap_base_local->name.length = 11;
+    heap_base_local->type = TYPE_CHAR | TYPE_POINTER_FLAG | TYPE_ABSOLUTE_FLAG;
+    heap_base_local->is_on_stack = true;
+    heap_base_local->depth = 0;
+    heap_base_local->frame_index = 0;
+
+    int heap_base = 16384;
+    lexer_t lsnap = lexer_snapshot();
+    parser_t psnap = parser_snapshot();
+
+    compiler.no_op = true;
     while (parser.current.type != TOKEN_EOF) {
         declaration();
     }
 
-    write_string("(global $__sp (mut i32) (i32.const 16384))\n");
+    heap_base = 16384 + compiler.data_offset;
+    heap_base_local->frame_index = heap_base;
 
-    int data_offset = 0;
-    for (int i = 0; i < compiler.string_count; i++) {
-        constchar_t *str = &compiler.strings[i];
+    compiler.fundef_count = 0;
+    compiler.structdef_count = 0;
+    compiler.local_count = 3;
+    compiler.const_count = 0;
+    compiler.data_offset = 0;
+    compiler.loop_counter = 0;
+
+    compiler.no_op = false;
+    lexer_restore(&lsnap);
+    parser_restore(&psnap);
+
+    while (parser.current.type != TOKEN_EOF) {
+        declaration();
+    }
+
+    for (int i = 0; i < compiler.const_count; i++) {
+        const_t *const_value = &compiler.consts[i];
         write_string("(data (i32.const ");
         char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%d", 16384 + data_offset);
+        snprintf(buffer, sizeof(buffer), "%d", 16384 + const_value->offset);
         write_string(buffer);
-
         write_string(") \"");
-        for (int j = 0; j < str->length; j++) {
-            char c = str->start[j];
-            if (c == '"' || c == '\\') {
-                write_string((char[]){c, '\0'});
-            } else if (c >= 32 && c <= 126) {
-                write_string((char[]){c, '\0'});
-            } else {
-                snprintf(buffer, sizeof(buffer), "\\%02x", (unsigned char)c);
-                write_string(buffer);
-            }
-        }
-        write_string("\\00\")\n");
 
-        data_offset += str->length + 1;
+        if (is_type(const_value->type, TYPE_CHAR)) {
+            const char *str = const_value->as.string;
+            for (int j = 0; j < const_value->size; j++) {
+                char c = str[j];
+                if (c == '"' || c == '\\') {
+                    write_string((char[]){c, '\0'});
+                } else if (c >= 32 && c <= 126) {
+                    write_string((char[]){c, '\0'});
+                } else {
+                    snprintf(buffer, sizeof(buffer), "\\%02x",
+                             (unsigned char)c);
+                    write_string(buffer);
+                }
+            }
+
+            write_string("\\00");
+        } else if (is_pointer(const_value->type)) {
+            if (const_value->is_local) {
+                printf("Writing pointer to local: %d\n",
+                       const_value->as.local->frame_index);
+                for (int j = 0; j < 4; ++j) {
+                    unsigned char byte =
+                        (const_value->as.local->frame_index >> (j * 8)) & 0xFF;
+                    snprintf(buffer, sizeof(buffer), "\\%02x", byte);
+                    write_string(buffer);
+                }
+            } else {
+                printf("Writing pointer constant: %d\n",
+                       const_value->as.const_value);
+                for (int j = 0; j < 4; ++j) {
+                    unsigned char byte =
+                        (const_value->as.const_value >> (j * 8)) & 0xFF;
+                    snprintf(buffer, sizeof(buffer), "\\%02x", byte);
+                    write_string(buffer);
+                }
+            }
+        } else {
+            error("Unsupported constant type for data segment.");
+        }
+
+        write_string("\")\n");
     }
+
+    write_string("(global $__sp (mut i32) (i32.const 16384))\n");
+    write_string("(global $__heap_base i32 (i32.const ");
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%d", heap_base);
+    write_string(buffer);
+    write_string("))\n");
 
     // write_string("(start $main)\n");
     write_string("(export \"memory\" (memory $0))\n");
