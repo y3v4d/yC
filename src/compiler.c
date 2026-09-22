@@ -241,7 +241,7 @@ static void error(const char *message) {
     parser.had_error = true;
 }
 
-static token_t advance() {
+static void advance() {
     parser.previous = parser.current;
 
     while (true) {
@@ -253,10 +253,8 @@ static token_t advance() {
     }
 
 #ifdef DEBUG_OUTPUT
-    print_token(parser.current);
+    print_token(parser.previous);
 #endif
-
-    return parser.current;
 }
 
 static bool check(tokentype_e type) { return parser.current.type == type; }

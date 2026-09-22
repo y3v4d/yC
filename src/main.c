@@ -45,7 +45,7 @@ static void repl() {
         }
 
         if (strcmp(input, "l\n") == 0) {
-            FILE *file = fopen("main.yc", "r");
+            FILE *file = fopen("main.yc", "rb");
             if (!file) {
                 fprintf(stderr, "Failed to open file: main.yc\n");
                 continue;
@@ -55,14 +55,14 @@ static void repl() {
             long length = ftell(file);
             fseek(file, 0, SEEK_SET);
 
-            fread(input, 1, length, file);
-            input[length] = '\0';
+            size_t bytes_read = fread(input, 1, length, file);
+            input[bytes_read] = '\0';
             fclose(file);
         } else if (strncmp(input, "load ", 5) == 0) {
             char *filename = input + 5;
             filename[strcspn(filename, "\n")] = '\0'; // remove newline
 
-            FILE *file = fopen(filename, "r");
+            FILE *file = fopen(filename, "rb");
             if (!file) {
                 fprintf(stderr, "Failed to open file: %s\n", filename);
                 continue;
@@ -79,8 +79,8 @@ static void repl() {
                 continue;
             }
 
-            fread(file_content, 1, length, file);
-            file_content[length] = '\0';
+            size_t bytes_read = fread(file_content, 1, length, file);
+            file_content[bytes_read] = '\0';
             fclose(file);
 
             strcpy(input, file_content);
