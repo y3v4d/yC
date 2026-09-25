@@ -1042,6 +1042,31 @@ static void bracket() {
     index_stackv->type |= VTYPE_LVALUE;
 }
 
+static void sizeof_prefix() {
+    consume(TOKEN_LEFT_PAREN, "Expected '(' after 'sizeof'.");
+
+    type_e type = match_type();
+    if (type == TYPE_UNKNOWN) {
+        bool last_no_op = compiler.no_op;
+
+        compiler.no_op = true;
+        expression(PREC_ASSIGNMENT);
+        compiler.no_op = last_no_op;
+
+        stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
+        type = last_stackv->ctype;
+    }
+
+    int size = get_type_size(type);
+
+    stackv_t *stackv = &compiler.stack[compiler.stack_count++];
+    stackv->type = VTYPE_CONST;
+    stackv->ctype = TYPE_I32;
+    stackv->as.const_value = size;
+
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'sizeof'.");
+}
+
 parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
                        [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
                        [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
@@ -1075,7 +1100,8 @@ parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
                        [TOKEN_VOID] = {NULL, NULL, PREC_NONE},
                        [TOKEN_LBRACKET] = {NULL, bracket, PREC_ACCESS},
                        [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_BANG] = {unary, NULL, PREC_UNARY}};
+                       [TOKEN_BANG] = {unary, NULL, PREC_UNARY},
+                       [TOKEN_SIZEOF] = {sizeof_prefix, NULL, PREC_NONE}};
 
 static parserule_t *get_rule(tokentype_e type) { return &rules[type]; }
 

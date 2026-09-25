@@ -146,6 +146,8 @@ static tokentype_e identifier_type() {
                 return check_keyword(2, 1, "r", TOKEN_FOR);
             }
         }
+
+        return TOKEN_IDENTIFIER;
     case 't':
         return check_keyword(1, 3, "rue", TOKEN_TRUE);
     case 'p':
@@ -155,7 +157,16 @@ static tokentype_e identifier_type() {
     case 'b':
         return check_keyword(1, 3, "ool", TOKEN_BOOL);
     case 's':
-        return check_keyword(1, 5, "truct", TOKEN_STRUCT);
+        if (lexer.current - lexer.start > 1) {
+            switch (lexer.start[1]) {
+            case 't':
+                return check_keyword(2, 4, "ruct", TOKEN_STRUCT);
+            case 'i':
+                return check_keyword(2, 4, "zeof", TOKEN_SIZEOF);
+            }
+        }
+
+        return TOKEN_IDENTIFIER;
     case 'v':
         return check_keyword(1, 3, "oid", TOKEN_VOID);
     case 'c':
