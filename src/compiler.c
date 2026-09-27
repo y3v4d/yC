@@ -65,7 +65,8 @@ typedef enum {
     OP_BLOCK,
     OP_JMP,
     OP_JMPIF,
-    OP_NEGATE
+    OP_NEGATE,
+    OP_EQUAL
 } optype_e;
 
 typedef struct {
@@ -182,6 +183,7 @@ typedef struct {
     int const_count;
 
     int data_offset;
+    local_t *frame_ptr;
 
     int scope_depth;
     int loop_counter;
@@ -191,6 +193,7 @@ typedef struct {
 typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
+    PREC_EQUALITY,   // ==
     PREC_TERM,       // + -
     PREC_FACTOR,     // * /
     PREC_UNARY,      // - & (unary)
@@ -216,6 +219,8 @@ static void compiler_init() {
     compiler.ops = NULL;
     compiler.op_count = 0;
     compiler.op_capcity = 0;
+
+    compiler.frame_ptr = compiler.locals;
 
     compiler.buffer = malloc(1024 * 1024);
     compiler.current = compiler.buffer;
@@ -515,6 +520,9 @@ static void print_op(op_t op) {
     case OP_NEGATE:
         printf("OP_NEGATE\n");
         break;
+    case OP_EQUAL:
+        printf("OP_EQUAL\n");
+        break;
     default:
         printf("UNKNOWN_OP\n");
         break;
@@ -568,6 +576,12 @@ static void write_token(token_t token) {
     for (int i = 0; i < token.length; i++) {
         *compiler.current++ = token.start[i];
     }
+}
+
+static void write_int(int value) {
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%d", value);
+    write_string(buffer);
 }
 
 // materialize vstack value on the wasm stack
@@ -896,6 +910,10 @@ static void call() {
 static void identifier() {
     local_t *found = NULL;
     for (int i = compiler.local_count - 1; i >= 0; --i) {
+        if (compiler.locals[i].depth > compiler.scope_depth) {
+            continue; // Skip locals that are out of scope
+        }
+
         if (compiler.locals[i].name.length == parser.previous.length &&
             strncmp(compiler.locals[i].name.start, parser.previous.start,
                     parser.previous.length) == 0) {
@@ -1067,6 +1085,24 @@ static void sizeof_prefix() {
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'sizeof'.");
 }
 
+static void equality() {
+    expression(PREC_EQUALITY + 1);
+
+    stackv_t *a = &compiler.stack[compiler.stack_count - 2];
+    stackv_t *b = &compiler.stack[compiler.stack_count - 1];
+
+    compiler.stack_count -= 2;
+
+    materialize_vstack(a);
+    materialize_vstack(b);
+
+    stackv_t *result = &compiler.stack[compiler.stack_count++];
+    result->type = VTYPE_STACK;
+    result->ctype = TYPE_BOOL;
+
+    write_op((op_t){.type = OP_EQUAL, .value_type = TYPE_BOOL});
+}
+
 parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
                        [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
                        [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
@@ -1101,7 +1137,8 @@ parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
                        [TOKEN_LBRACKET] = {NULL, bracket, PREC_ACCESS},
                        [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE},
                        [TOKEN_BANG] = {unary, NULL, PREC_UNARY},
-                       [TOKEN_SIZEOF] = {sizeof_prefix, NULL, PREC_NONE}};
+                       [TOKEN_SIZEOF] = {sizeof_prefix, NULL, PREC_NONE},
+                       [TOKEN_EQUAL_EQUAL] = {NULL, equality, PREC_EQUALITY}};
 
 static parserule_t *get_rule(tokentype_e type) { return &rules[type]; }
 
@@ -1318,12 +1355,11 @@ static void function(type_e return_type) {
     token_t name = parser.previous;
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
 
-    local_t *local = &compiler.locals[compiler.local_count];
+    local_t *local = &compiler.locals[compiler.local_count++];
     local->name = name;
     local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     local->is_on_stack = false;
     local->depth = compiler.scope_depth;
-    compiler.local_count++;
 
     if (!compiler.no_op) {
         write_string("(func $");
@@ -1333,6 +1369,9 @@ static void function(type_e return_type) {
 
     compiler.temp_max = 0;
     int frame_ptr = compiler.local_count;
+    local_t *last_frame_ptr = compiler.frame_ptr;
+
+    compiler.frame_ptr = &compiler.locals[frame_ptr];
 
     fundef_t *fundef = &compiler.fundefs[compiler.fundef_count++];
     fundef->name = name;
@@ -1348,7 +1387,7 @@ static void function(type_e return_type) {
 
             if (!compiler.no_op) {
                 write_string("(param $");
-                write_token(param_name);
+                write_int(compiler.local_count - frame_ptr);
                 write_string(" ");
                 write_type(param_type);
                 write_string(")");
@@ -1403,14 +1442,15 @@ static void function(type_e return_type) {
     }
 
     int stack_length = 0;
-    for (int i = compiler.local_count - 1; i >= frame_ptr; --i) {
+    for (int i = frame_ptr; i < compiler.local_count; i++) {
         local_t *local = &compiler.locals[i];
+
         if (local->is_on_stack) {
             local->frame_index = stack_length;
             stack_length += get_type_size(local->type);
         } else if (!local->is_param) {
             write_string("(local $");
-            write_token(local->name);
+            write_int(i - frame_ptr);
             write_string(" ");
             write_type(local->type);
             write_string(")\n");
@@ -1605,7 +1645,7 @@ static void function(type_e return_type) {
                 }
             } else {
                 write_string("local.set $");
-                write_token(local->name);
+                write_int(local - compiler.frame_ptr);
                 write_string("\n");
             }
             break;
@@ -1638,7 +1678,7 @@ static void function(type_e return_type) {
                 }
             } else {
                 write_string("local.get $");
-                write_token(local->name);
+                write_int(local - compiler.frame_ptr);
                 write_string("\n");
             }
 
@@ -1760,7 +1800,8 @@ static void function(type_e return_type) {
             op_t *op = &compiler.ops[i];
             if (is_pointer(op->value_type)) {
                 write_string("call $print_i32\n");
-            } else if (is_type(op->value_type, TYPE_I32)) {
+            } else if (is_type(op->value_type, TYPE_I32) ||
+                       is_type(op->value_type, TYPE_BOOL)) {
                 write_string("call $print_i32\n");
             } else if (is_type(op->value_type, TYPE_I64)) {
                 write_string("call $print_i64\n");
@@ -1768,6 +1809,10 @@ static void function(type_e return_type) {
                 error("Unsupported type for print.");
             }
 
+            break;
+        }
+        case OP_EQUAL: {
+            write_string("i32.eq\n");
             break;
         }
         default:
@@ -1787,6 +1832,7 @@ static void function(type_e return_type) {
 
     compiler.op_count = 0;
     compiler.local_count = frame_ptr;
+    compiler.frame_ptr = last_frame_ptr;
     compiler.temp_max = 0;
 
     write_string(")\n");

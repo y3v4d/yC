@@ -7,7 +7,16 @@ char* malloc(i32 n) {
 }
 
 void main() {
-    char* test = malloc(10);
+    i32 b = 20;
+    char c = 'h';
+    char d = 'c';
+    if(c == d) {
+        i32 b = 10;
+        print b;
+    }
+
+    print b;
+    /*char* test = malloc(10);
     i32* testi = malloc(2 * sizeof(i32));
     char* test2 = malloc(4);
 
@@ -27,5 +36,5 @@ void main() {
     print *testi;
     print *(testi + 4);
     print testi[1];
-    puts(test2);
+    puts(test2);*/
 }

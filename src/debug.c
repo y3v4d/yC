@@ -123,6 +123,9 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_SIZEOF:
         printf("TOKEN_SIZEOF");
         break;
+    case TOKEN_EQUAL_EQUAL:
+        printf("TOKEN_EQUAL_EQUAL");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

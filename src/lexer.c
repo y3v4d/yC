@@ -253,7 +253,12 @@ token_t lexer_token() {
     case ')':
         return token_create(TOKEN_RIGHT_PAREN);
     case '=':
-        return token_create(TOKEN_EQUAL);
+        if (*lexer.current == '=') {
+            advance();
+            return token_create(TOKEN_EQUAL_EQUAL);
+        } else {
+            return token_create(TOKEN_EQUAL);
+        }
     case ';':
         return token_create(TOKEN_SEMICOLON);
     case '{':
