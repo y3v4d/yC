@@ -126,6 +126,27 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_EQUAL_EQUAL:
         printf("TOKEN_EQUAL_EQUAL");
         break;
+    case TOKEN_BANG_EQUAL:
+        printf("TOKEN_BANG_EQUAL");
+        break;
+    case TOKEN_GREATER:
+        printf("TOKEN_GREATER");
+        break;
+    case TOKEN_GREATER_EQUAL:
+        printf("TOKEN_GREATER_EQUAL");
+        break;
+    case TOKEN_LESS:
+        printf("TOKEN_LESS");
+        break;
+    case TOKEN_LESS_EQUAL:
+        printf("TOKEN_LESS_EQUAL");
+        break;
+    case TOKEN_AND:
+        printf("TOKEN_AND");
+        break;
+    case TOKEN_OR:
+        printf("TOKEN_OR");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

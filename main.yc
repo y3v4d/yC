@@ -8,14 +8,11 @@ char* malloc(i32 n) {
 
 void main() {
     i32 b = 20;
-    char c = 'h';
-    char d = 'c';
-    if(c == d) {
-        i32 b = 10;
-        print b;
-    }
+    i32 c = 10;
+    i32 d = 0;
+    bool e = b && c == 10 && d || true;
 
-    print b;
+    print e;
     /*char* test = malloc(10);
     i32* testi = malloc(2 * sizeof(i32));
     char* test2 = malloc(4);

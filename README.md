@@ -5,7 +5,7 @@ Both parser and lexer are hand-written, and the compiler is written in C (not se
 
 ## Features
 
-A (yet small) list of features that yC currently supports:
+A (bit bigger) list of features that yC currently supports:
 
 - **Hand-written Lexer** - tokenizes the input source code
 - **Hand-written Parser** - Pratt-parser that generates the WAT output directly (without an AST) in a single pass. In most places it first generates an intermidiate representation in form of simple opcodes which are later lowered to WAT. This is done to simplify the code generation and make it easier to add new features and targets in the future.
@@ -13,7 +13,7 @@ A (yet small) list of features that yC currently supports:
 - **Functions** - can be defined and called with parameters
 - **Structs** - user-defined types that can contain multiple fields
 - **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name.
-- **Basic flow control** - if/else statements, for and while loops
+- **Flow control** - if/else statements, for and while loops, and (&&) opertion, or (||) operation, not (!) operation, comparison operators (==, !=, <, >, <=, >=)
 - **Structs** - user-defined types that can contain multiple fields. Structs as function parameters currently are only supported to be passed by value (utilizing similar copy mechanism C uses).
 - **Arrays** - C-like arrays, where every pointer is an array of elements of the same type, accessible through pointer arithmetic, ex. `*(p + 1)` or bracket notation `p[1]`. There are no bounds checks or fixed sized arrays (yet).
 - **Shadow stack** - stack implemented in WebAssembly linear memory, used for storing variables. When possible the compiler will try to use WebAssembly's native local variables instead of the shadow stack, but all structs and addressed variables will be stored on the shadow stack. Currently, the allocated memory for shadow stack is 4kb and is not configurable. In the future I plan to add support for specifying the size of the shadow stack on compilation time.

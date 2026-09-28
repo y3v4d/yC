@@ -58,6 +58,7 @@ typedef enum {
     OP_CONVERT,
     OP_CALL,
     OP_IF,
+    OP_IFR,
     OP_ELSE,
     OP_END,
     OP_PRINT,
@@ -66,7 +67,13 @@ typedef enum {
     OP_JMP,
     OP_JMPIF,
     OP_NEGATE,
-    OP_EQUAL
+    OP_EQUAL,
+    OP_NEQUAL,
+    OP_GREATER,
+    OP_LESS,
+    OP_GREATER_EQUAL,
+    OP_LESS_EQUAL,
+    OP_EQZ
 } optype_e;
 
 typedef struct {
@@ -189,11 +196,14 @@ typedef struct {
     int loop_counter;
     bool no_op;
 } compiler_t;
+// a && b == c
 
 typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
+    PREC_AND,        // &&
     PREC_EQUALITY,   // ==
+    PREC_COMPARISON, // < > <= >=
     PREC_TERM,       // + -
     PREC_FACTOR,     // * /
     PREC_UNARY,      // - & (unary)
@@ -522,6 +532,27 @@ static void print_op(op_t op) {
         break;
     case OP_EQUAL:
         printf("OP_EQUAL\n");
+        break;
+    case OP_NEQUAL:
+        printf("OP_NEQUAL\n");
+        break;
+    case OP_GREATER:
+        printf("OP_GREATER\n");
+        break;
+    case OP_LESS:
+        printf("OP_LESS\n");
+        break;
+    case OP_GREATER_EQUAL:
+        printf("OP_GREATER_EQUAL\n");
+        break;
+    case OP_LESS_EQUAL:
+        printf("OP_LESS_EQUAL\n");
+        break;
+    case OP_EQZ:
+        printf("OP_EQZ\n");
+        break;
+    case OP_IFR:
+        printf("OP_IFR\n");
         break;
     default:
         printf("UNKNOWN_OP\n");
@@ -1086,6 +1117,8 @@ static void sizeof_prefix() {
 }
 
 static void equality() {
+    tokentype_e op_type = parser.previous.type;
+
     expression(PREC_EQUALITY + 1);
 
     stackv_t *a = &compiler.stack[compiler.stack_count - 2];
@@ -1100,45 +1133,126 @@ static void equality() {
     result->type = VTYPE_STACK;
     result->ctype = TYPE_BOOL;
 
-    write_op((op_t){.type = OP_EQUAL, .value_type = TYPE_BOOL});
+    switch (op_type) {
+    case TOKEN_EQUAL_EQUAL:
+        write_op((op_t){.type = OP_EQUAL, .value_type = TYPE_BOOL});
+        break;
+    case TOKEN_BANG_EQUAL:
+        write_op((op_t){.type = OP_NEQUAL, .value_type = TYPE_BOOL});
+        break;
+    case TOKEN_GREATER:
+        write_op((op_t){.type = OP_GREATER, .value_type = TYPE_BOOL});
+        break;
+    case TOKEN_LESS:
+        write_op((op_t){.type = OP_LESS, .value_type = TYPE_BOOL});
+        break;
+    case TOKEN_GREATER_EQUAL:
+        write_op((op_t){.type = OP_GREATER_EQUAL, .value_type = TYPE_BOOL});
+        break;
+    case TOKEN_LESS_EQUAL:
+        write_op((op_t){.type = OP_LESS_EQUAL, .value_type = TYPE_BOOL});
+        break;
+    default:
+        error("Expected an equality operator.");
+        break;
+    }
 }
 
-parserule_t rules[] = {[TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
-                       [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
-                       [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
-                       [TOKEN_MINUS] = {unary, binary, PREC_TERM},
-                       [TOKEN_STAR] = {dereference, binary, PREC_FACTOR},
-                       [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
-                       [TOKEN_IDENTIFIER] = {identifier, NULL, PREC_NONE},
-                       [TOKEN_AMPERSAND] = {address, NULL, PREC_NONE},
-                       [TOKEN_I32] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_I64] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_F32] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_F64] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_IF] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_SEMICOLON] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
-                       [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_BOOL] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_TRUE] = {boolean, NULL, PREC_NONE},
-                       [TOKEN_FALSE] = {boolean, NULL, PREC_NONE},
-                       [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_STRUCT] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_DOT] = {NULL, dot, PREC_ACCESS},
-                       [TOKEN_CHAR_LITERAL] = {character, NULL, PREC_NONE},
-                       [TOKEN_STRING_LITERAL] = {string, NULL, PREC_NONE},
-                       [TOKEN_VOID] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_LBRACKET] = {NULL, bracket, PREC_ACCESS},
-                       [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE},
-                       [TOKEN_BANG] = {unary, NULL, PREC_UNARY},
-                       [TOKEN_SIZEOF] = {sizeof_prefix, NULL, PREC_NONE},
-                       [TOKEN_EQUAL_EQUAL] = {NULL, equality, PREC_EQUALITY}};
+static void and() {
+    stackv_t *a = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(a);
+
+    write_op((op_t){.type = OP_IFR, .value_type = TYPE_BOOL});
+    expression(PREC_AND + 1);
+
+    stackv_t *b = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(b);
+    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+
+    write_op((op_t){.type = OP_ELSE, .value_type = TYPE_BOOL});
+    write_op(
+        (op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.const_value = 0});
+    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+
+    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+
+    compiler.stack_count -= 2;
+
+    stackv_t *result = &compiler.stack[compiler.stack_count++];
+    result->type = VTYPE_STACK;
+    result->ctype = TYPE_BOOL;
+}
+
+static void or() {
+    stackv_t *a = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(a);
+
+    write_op((op_t){.type = OP_IFR, .value_type = TYPE_BOOL});
+    write_op(
+        (op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.const_value = 1});
+    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+
+    write_op((op_t){.type = OP_ELSE, .value_type = TYPE_BOOL});
+
+    expression(PREC_AND + 1);
+
+    stackv_t *b = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(b);
+
+    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+
+    compiler.stack_count -= 2;
+
+    stackv_t *result = &compiler.stack[compiler.stack_count++];
+    result->type = VTYPE_STACK;
+    result->ctype = TYPE_BOOL;
+}
+
+parserule_t rules[] = {
+    [TOKEN_LEFT_PAREN] = {group, call, PREC_CALL},
+    [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
+    [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
+    [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
+    [TOKEN_MINUS] = {unary, binary, PREC_TERM},
+    [TOKEN_STAR] = {dereference, binary, PREC_FACTOR},
+    [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
+    [TOKEN_IDENTIFIER] = {identifier, NULL, PREC_NONE},
+    [TOKEN_AMPERSAND] = {address, NULL, PREC_NONE},
+    [TOKEN_I32] = {NULL, NULL, PREC_NONE},
+    [TOKEN_I64] = {NULL, NULL, PREC_NONE},
+    [TOKEN_F32] = {NULL, NULL, PREC_NONE},
+    [TOKEN_F64] = {NULL, NULL, PREC_NONE},
+    [TOKEN_IF] = {NULL, NULL, PREC_NONE},
+    [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
+    [TOKEN_SEMICOLON] = {NULL, NULL, PREC_NONE},
+    [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
+    [TOKEN_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
+    [TOKEN_BOOL] = {NULL, NULL, PREC_NONE},
+    [TOKEN_TRUE] = {boolean, NULL, PREC_NONE},
+    [TOKEN_FALSE] = {boolean, NULL, PREC_NONE},
+    [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
+    [TOKEN_STRUCT] = {NULL, NULL, PREC_NONE},
+    [TOKEN_DOT] = {NULL, dot, PREC_ACCESS},
+    [TOKEN_CHAR_LITERAL] = {character, NULL, PREC_NONE},
+    [TOKEN_STRING_LITERAL] = {string, NULL, PREC_NONE},
+    [TOKEN_VOID] = {NULL, NULL, PREC_NONE},
+    [TOKEN_LBRACKET] = {NULL, bracket, PREC_ACCESS},
+    [TOKEN_RBRACKET] = {NULL, NULL, PREC_NONE},
+    [TOKEN_BANG] = {unary, NULL, PREC_UNARY},
+    [TOKEN_SIZEOF] = {sizeof_prefix, NULL, PREC_NONE},
+    [TOKEN_EQUAL_EQUAL] = {NULL, equality, PREC_EQUALITY},
+    [TOKEN_BANG_EQUAL] = {NULL, equality, PREC_EQUALITY},
+    [TOKEN_GREATER] = {NULL, equality, PREC_COMPARISON},
+    [TOKEN_LESS] = {NULL, equality, PREC_COMPARISON},
+    [TOKEN_GREATER_EQUAL] = {NULL, equality, PREC_COMPARISON},
+    [TOKEN_LESS_EQUAL] = {NULL, equality, PREC_COMPARISON},
+    [TOKEN_AND] = {NULL, and, PREC_AND},
+    [TOKEN_OR] = {NULL, or, PREC_AND}};
 
 static parserule_t *get_rule(tokentype_e type) { return &rules[type]; }
 
@@ -1754,6 +1868,13 @@ static void function(type_e return_type) {
             write_string("(if\n");
             write_string("(then\n");
             break;
+        case OP_IFR:
+            write_string("(if (result ");
+            write_type(compiler.ops[i].value_type);
+            write_string(")\n");
+
+            write_string("(then\n");
+            break;
         case OP_ELSE:
             write_string("(else\n");
             break;
@@ -1813,6 +1934,30 @@ static void function(type_e return_type) {
         }
         case OP_EQUAL: {
             write_string("i32.eq\n");
+            break;
+        }
+        case OP_NEQUAL: {
+            write_string("i32.ne\n");
+            break;
+        }
+        case OP_GREATER: {
+            write_string("i32.gt_s\n");
+            break;
+        }
+        case OP_LESS: {
+            write_string("i32.lt_s\n");
+            break;
+        }
+        case OP_GREATER_EQUAL: {
+            write_string("i32.ge_s\n");
+            break;
+        }
+        case OP_LESS_EQUAL: {
+            write_string("i32.le_s\n");
+            break;
+        }
+        case OP_EQZ: {
+            write_string("i32.eqz\n");
             break;
         }
         default:

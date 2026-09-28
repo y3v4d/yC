@@ -267,8 +267,14 @@ token_t lexer_token() {
         return token_create(TOKEN_RIGHT_BRACE);
     case ',':
         return token_create(TOKEN_COMMA);
-    case '&':
-        return token_create(TOKEN_AMPERSAND);
+    case '&': {
+        if (*lexer.current == '&') {
+            advance();
+            return token_create(TOKEN_AND);
+        } else {
+            return token_create(TOKEN_AMPERSAND);
+        }
+    }
     case '.':
         return token_create(TOKEN_DOT);
     case '[':
@@ -276,11 +282,37 @@ token_t lexer_token() {
     case ']':
         return token_create(TOKEN_RBRACKET);
     case '!':
-        return token_create(TOKEN_BANG);
+        if (*lexer.current == '=') {
+            advance();
+            return token_create(TOKEN_BANG_EQUAL);
+        } else {
+            return token_create(TOKEN_BANG);
+        }
     case '"':
         return token_string();
     case '\'':
         return token_character();
+    case '>':
+        if (*lexer.current == '=') {
+            advance();
+            return token_create(TOKEN_GREATER_EQUAL);
+        } else {
+            return token_create(TOKEN_GREATER);
+        }
+    case '<':
+        if (*lexer.current == '=') {
+            advance();
+            return token_create(TOKEN_LESS_EQUAL);
+        } else {
+            return token_create(TOKEN_LESS);
+        }
+    case '|':
+        if (*lexer.current == '|') {
+            advance();
+            return token_create(TOKEN_OR);
+        } else {
+            return token_create(TOKEN_ERROR);
+        }
     default:
         return token_create(TOKEN_ERROR);
     }
