@@ -803,6 +803,12 @@ static void write_const(const_u c, type_e type) {
     }
 }
 
+static void write_i32_const(int value) {
+    write_string("i32.const ");
+    write_int(value);
+    write_string("\n");
+}
+
 // materialize vstack value on the wasm stack
 static void materialize_vstack(stackv_t *stackv) {
     if (isv_lvalue(stackv->type)) {
@@ -1923,9 +1929,7 @@ static void function(type_e return_type) {
 
     if (stack_length > 0) {
         write_string("global.get $__sp\n");
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "i32.const %d\n", stack_length);
-        write_string(buffer);
+        write_i32_const(stack_length);
         write_string("i32.sub\n");
         write_string("global.set $__sp\n");
     }
@@ -2036,18 +2040,11 @@ static void function(type_e return_type) {
             int offset = op->offset;
 
             if (local->is_absolute) {
-                write_string(";; Get address of absolute variable\n");
-                write_string("i32.const ");
-                char buffer[32];
-                snprintf(buffer, sizeof(buffer), "%d\n", local->frame_index);
-                write_string(buffer);
+                write_i32_const(local->frame_index);
             } else if (local->is_on_stack) {
-                write_string(";; Get address of variable on stack\n");
                 write_string("global.get $__sp\n");
-
                 offset += local->frame_index;
             } else if (is_struct(local->type)) {
-                write_string(";; Get address of struct variable\n");
                 write_string("local.get $");
                 write_token(local->name);
                 write_string("\n");
@@ -2056,10 +2053,7 @@ static void function(type_e return_type) {
             }
 
             if (offset > 0) {
-                write_string("i32.const ");
-                char buffer[32];
-                snprintf(buffer, sizeof(buffer), "%d\n", offset);
-                write_string(buffer);
+                write_i32_const(offset);
                 write_string("i32.add\n");
             }
 
@@ -2075,13 +2069,8 @@ static void function(type_e return_type) {
                                 !is_pointer(op->value_type);
 
             if (is_op_struct) {
-                write_string(";; Copy struct to variable\n");
-                write_string("i32.const ");
-                char buffer[32];
-                snprintf(buffer, sizeof(buffer), "%d\n",
-                         calculate_struct_size(
-                             &compiler.structdefs[get_type_data(local->type)]));
-                write_string(buffer);
+                write_i32_const(calculate_struct_size(
+                    &compiler.structdefs[get_type_data(local->type)]));
                 write_string("memory.copy\n");
             } else if (local->is_on_stack || is_local_struct) {
                 write_type(op->value_type);
@@ -2148,20 +2137,16 @@ static void function(type_e return_type) {
             }
             break;
         case OP_STORE: {
-            if (is_struct(compiler.ops[i].value_type)) {
-                write_string(";; Copy struct to address\n");
-                write_string("i32.const ");
-                char buffer[32];
-                snprintf(
-                    buffer, sizeof(buffer), "%d\n",
-                    calculate_struct_size(&compiler.structdefs[get_type_data(
-                        compiler.ops[i].value_type)]));
-                write_string(buffer);
+            op_t *op = &compiler.ops[i];
+
+            if (is_struct(op->value_type)) {
+                write_i32_const(calculate_struct_size(
+                    &compiler.structdefs[get_type_data(op->value_type)]));
                 write_string("memory.copy\n");
             } else {
-                write_type(compiler.ops[i].value_type);
+                write_type(op->value_type);
 
-                if (is_type(compiler.ops[i].value_type, TYPE_CHAR)) {
+                if (is_type(op->value_type, TYPE_CHAR)) {
                     write_string(".store8\n");
                 } else {
                     write_string(".store\n");
@@ -2335,37 +2320,25 @@ static void function(type_e return_type) {
             break;
         case OP_LOOP: {
             write_string("(loop $label");
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d",
-                     compiler.ops[i].as.label_index);
-            write_string(buffer);
+            write_int(compiler.ops[i].as.label_index);
             write_string("\n");
             break;
         }
         case OP_BLOCK: {
             write_string("(block $label");
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d",
-                     compiler.ops[i].as.label_index);
-            write_string(buffer);
+            write_int(compiler.ops[i].as.label_index);
             write_string("\n");
             break;
         }
         case OP_JMP: {
             write_string("br $label");
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d",
-                     compiler.ops[i].as.label_index);
-            write_string(buffer);
+            write_int(compiler.ops[i].as.label_index);
             write_string("\n");
             break;
         }
         case OP_JMPIF: {
             write_string("br_if $label");
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d",
-                     compiler.ops[i].as.label_index);
-            write_string(buffer);
+            write_int(compiler.ops[i].as.label_index);
             write_string("\n");
             break;
         }
@@ -2425,9 +2398,7 @@ static void function(type_e return_type) {
 
     if (stack_length > 0) {
         write_string("global.get $__sp\n");
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "i32.const %d\n", stack_length);
-        write_string(buffer);
+        write_i32_const(stack_length);
         write_string("i32.add\n");
         write_string("global.set $__sp\n");
     }
@@ -2621,8 +2592,9 @@ static void module() {
 
     for (int i = 0; i < compiler.const_count; i++) {
         const_t *const_value = &compiler.consts[i];
-        write_string("(data (i32.const ");
         char buffer[32];
+
+        write_string("(data (i32.const ");
         snprintf(buffer, sizeof(buffer), "%d", 16384 + const_value->offset);
         write_string(buffer);
         write_string(") \"");
@@ -2700,9 +2672,7 @@ static void module() {
 
     write_string("(global $__sp (mut i32) (i32.const 16384))\n");
     write_string("(global $__heap_base i32 (i32.const ");
-    char buffer[32];
-    snprintf(buffer, sizeof(buffer), "%d", heap_base);
-    write_string(buffer);
+    write_int(heap_base);
     write_string("))\n");
 
     // write_string("(start $main)\n");
