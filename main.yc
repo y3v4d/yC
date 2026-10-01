@@ -6,16 +6,52 @@ char* malloc(i32 n) {
     return r;
 }
 
-void main() {
-    i32 b = 20;
-    i32 c = 10;
-    i32 d = 0;
-    bool e = b && c == 10 && d || true;
+i32 hello = 4;
+f32 v = 16;
+f64 hello2 = (i32)15.52;
+i64 hello3 = 123513233;
+bool yoyo = true;
 
-    print e;
-    /*char* test = malloc(10);
+struct test_t {
+    i32 a;
+    i32 b;
+}
+
+void main() {
+    test_t g;
+
+    g.a = 10;
+    g.b = 20;
+
+    i32 result = 10.5 + g.a;
+
+    print result;
+    print !(i32*)0;
+
+    print v;
+    print hello;
+    print hello2;
+    print hello3;
+
+    f32 f = 10.0;
+    f64 d = 10.0;
+    bool e = (bool)1;
+    test_t hello5;
+
+    hello5.a = 10;
+    hello5.b = 20;
+
+    i32 convert_f32 = 10.5 + hello5.b;
+
+    f32 z = f + 10.0;
+    z = 12.5 + (i32)true;
+    puts("z: ");
+    print z;
+    print (f32)convert_f32;
+    char* test = malloc(10);
     i32* testi = malloc(2 * sizeof(i32));
     char* test2 = malloc(4);
+
 
     testi[0] = 5;
     testi[1] = 10;
@@ -26,12 +62,13 @@ void main() {
     test2[3] = '!';
     test2[4] = 0;
 
-    print sizeof(*test);
+    puts("sizeof(i64) + sizeof(char): ");
+    print sizeof(i64) + sizeof(char);
 
     print test;
     print testi;
     print *testi;
     print *(testi + 4);
     print testi[1];
-    puts(test2);*/
+    puts(test2);
 }

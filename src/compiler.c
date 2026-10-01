@@ -34,10 +34,9 @@ typedef enum {
     TYPE_STRUCT,
     TYPE_FUN,
 
-    TYPE_POINTER_FLAG = 0b01000000,
-    TYPE_ABSOLUTE_FLAG = 0b10000000,
+    TYPE_POINTER_FLAG = 0b10000000,
 
-    TYPE_BASE_MASK = 0b00111111,
+    TYPE_BASE_MASK = 0b01111111,
     TYPE_DATA_MASK = 0xFFFFFF00,
 
     TYPE_MAX_VALUE = INT_MAX // 32-bit integer max value
@@ -76,6 +75,13 @@ typedef enum {
     OP_EQZ
 } optype_e;
 
+typedef union {
+    int i32;
+    long i64;
+    float f32;
+    double f64;
+} const_u;
+
 typedef struct {
     optype_e type;
     type_e value_type;
@@ -90,7 +96,7 @@ typedef struct {
         } convert;
 
         int temp_offset;
-        int const_value;
+        const_u c;
         int var_index;
         int label_index;
     } as;
@@ -100,6 +106,7 @@ typedef struct {
     token_t name;
     type_e type;
 
+    bool is_absolute;
     bool is_on_stack;
     bool is_param;
 
@@ -146,7 +153,7 @@ typedef struct {
     int offset;
 
     union {
-        int const_value;
+        const_u c;
         local_t *local;
     } as;
 } stackv_t;
@@ -158,7 +165,7 @@ typedef struct {
     int size;
 
     union {
-        int const_value;
+        const_u c;
         const char *string;
         local_t *local;
     } as;
@@ -345,7 +352,6 @@ static bool is_type(type_e type, type_e check) {
 }
 
 static bool is_pointer(type_e type) { return (type & TYPE_POINTER_FLAG); }
-static bool is_absolute(type_e type) { return (type & TYPE_ABSOLUTE_FLAG); }
 
 static bool is_struct(type_e type) {
     return is_type(type, TYPE_STRUCT) && !is_pointer(type);
@@ -457,6 +463,141 @@ static void write_op(op_t op) {
     compiler.ops[compiler.op_count++] = op;
 }
 
+static void print_const(type_e type, const_u c) {
+    if (is_pointer(type)) {
+        printf("%d", c.i32);
+        return;
+    }
+
+    switch (type & TYPE_BASE_MASK) {
+    case TYPE_BOOL:
+    case TYPE_CHAR:
+    case TYPE_I32:
+        printf("%d", c.i32);
+        break;
+    case TYPE_I64:
+        printf("%ld", c.i64);
+        break;
+    case TYPE_F32:
+        printf("%f", c.f32);
+        break;
+    case TYPE_F64:
+        printf("%f", c.f64);
+        break;
+    default:
+        printf("Unknown constant type\n");
+        break;
+    }
+}
+
+static const_u cast_const(const_u self, type_e from, type_e to) {
+    const_u result = {0};
+
+    if (is_pointer(to) && is_pointer(from)) {
+        result.i32 = self.i32;
+    } else if (is_pointer(to)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_CHAR) ||
+            is_type(from, TYPE_BOOL)) {
+            result.i32 = self.i32;
+        } else if (is_type(from, TYPE_I64)) {
+            result.i32 = (int)self.i64;
+        } else if (is_type(from, TYPE_F32)) {
+            error("Cannot cast from f32 to pointer.");
+        } else if (is_type(from, TYPE_F64)) {
+            error("Cannot cast from f64 to pointer.");
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_pointer(from)) {
+        if (is_type(to, TYPE_I32) || is_type(to, TYPE_CHAR) ||
+            is_type(to, TYPE_BOOL)) {
+            result.i32 = self.i32;
+        } else if (is_type(to, TYPE_I64)) {
+            result.i64 = (long)self.i32;
+        } else if (is_type(to, TYPE_F32)) {
+            error("Cannot cast from pointer to f32.");
+        } else if (is_type(to, TYPE_F64)) {
+            error("Cannot cast from pointer to f64.");
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_type(to, TYPE_I32)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_CHAR) ||
+            is_type(from, TYPE_BOOL)) {
+            result.i32 = self.i32;
+        } else if (is_type(from, TYPE_F32)) {
+            result.i32 = (int)self.f32;
+        } else if (is_type(from, TYPE_F64)) {
+            result.i32 = (int)self.f64;
+        } else if (is_type(from, TYPE_I64)) {
+            result.i32 = (int)self.i64;
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_type(to, TYPE_I64)) {
+        if (is_type(from, TYPE_F32) || is_type(from, TYPE_CHAR) ||
+            is_type(from, TYPE_BOOL)) {
+            result.i64 = (long)self.f32;
+        } else if (is_type(from, TYPE_F64)) {
+            result.i64 = (long)self.f64;
+        } else if (is_type(from, TYPE_I32)) {
+            result.i64 = (long)self.i32;
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_type(to, TYPE_F32)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_CHAR) ||
+            is_type(from, TYPE_BOOL)) {
+            result.f32 = (float)self.i32;
+        } else if (is_type(from, TYPE_I64)) {
+            result.f32 = (float)self.i64;
+        } else if (is_type(from, TYPE_F64)) {
+            result.f32 = (float)self.f64;
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_type(to, TYPE_F64)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_CHAR) ||
+            is_type(from, TYPE_BOOL)) {
+            result.f64 = (double)self.i32;
+        } else if (is_type(from, TYPE_I64)) {
+            result.f64 = (double)self.i64;
+        } else if (is_type(from, TYPE_F32)) {
+            result.f64 = (double)self.f32;
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_type(to, TYPE_CHAR)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_BOOL)) {
+            result.i32 = (char)self.i32;
+        } else if (is_type(from, TYPE_I64)) {
+            result.i32 = (char)self.i64;
+        } else if (is_type(from, TYPE_F32)) {
+            result.i32 = (char)self.f32;
+        } else if (is_type(from, TYPE_F64)) {
+            result.i32 = (char)self.f64;
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else if (is_type(to, TYPE_BOOL)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_CHAR)) {
+            result.i32 = (self.i32 != 0);
+        } else if (is_type(from, TYPE_I64)) {
+            result.i32 = (self.i64 != 0);
+        } else if (is_type(from, TYPE_F32)) {
+            result.i32 = (self.f32 != 0.0f);
+        } else if (is_type(from, TYPE_F64)) {
+            result.i32 = (self.f64 != 0.0);
+        } else {
+            error("Unsupported type for cast_const.");
+        }
+    } else {
+        error("Unsupported type for cast_const.");
+    }
+
+    return result;
+}
+
 static void print_op(op_t op) {
     if (compiler.no_op) {
         return;
@@ -479,7 +620,9 @@ static void print_op(op_t op) {
         printf("OP_ADDRESS_VAR %d\n", op.as.var_index);
         break;
     case OP_CONST:
-        printf("OP_CONST %d\n", op.as.const_value);
+        printf("OP_CONST ");
+        print_const(op.value_type, op.as.c);
+        printf("\n");
         break;
     case OP_CALL:
         printf("OP_CALL %d\n", op.as.var_index);
@@ -615,6 +758,51 @@ static void write_int(int value) {
     write_string(buffer);
 }
 
+static void write_long(long value) {
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%ld", value);
+    write_string(buffer);
+}
+
+static void write_float(float value) {
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%f", value);
+    write_string(buffer);
+}
+
+static void write_double(double value) {
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%f", value);
+    write_string(buffer);
+}
+
+static void write_const(const_u c, type_e type) {
+    if (is_pointer(type)) {
+        write_int(c.i32);
+        return;
+    }
+
+    switch (type & TYPE_BASE_MASK) {
+    case TYPE_BOOL:
+    case TYPE_CHAR:
+    case TYPE_I32:
+        write_int(c.i32);
+        break;
+    case TYPE_I64:
+        write_long(c.i64);
+        break;
+    case TYPE_F32:
+        write_float(c.f32);
+        break;
+    case TYPE_F64:
+        write_double(c.f64);
+        break;
+    default:
+        error("Expected a primitive type.");
+        break;
+    }
+}
+
 // materialize vstack value on the wasm stack
 static void materialize_vstack(stackv_t *stackv) {
     if (isv_lvalue(stackv->type)) {
@@ -636,7 +824,7 @@ static void materialize_vstack(stackv_t *stackv) {
             if (stackv->offset > 0) {
                 write_op((op_t){.type = OP_CONST,
                                 .value_type = TYPE_I32,
-                                .as.const_value = stackv->offset});
+                                .as.c.i32 = stackv->offset});
 
                 write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
             }
@@ -653,7 +841,7 @@ static void materialize_vstack(stackv_t *stackv) {
         if (isv_const(stackv->type)) {
             write_op((op_t){.type = OP_CONST,
                             .value_type = stackv->ctype,
-                            .as.const_value = stackv->as.const_value});
+                            .as.c = stackv->as.c});
 
             stackv->type &= ~VTYPE_STORAGE;
             stackv->type |= VTYPE_STACK;
@@ -667,7 +855,7 @@ static void materialize_vstack(stackv_t *stackv) {
             if (stackv->offset > 0) {
                 write_op((op_t){.type = OP_CONST,
                                 .value_type = TYPE_I32,
-                                .as.const_value = stackv->offset});
+                                .as.c.i32 = stackv->offset});
 
                 write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
             }
@@ -684,6 +872,11 @@ static void store_vstack(stackv_t *stackv) {
                         .value_type = stackv->ctype,
                         .as.var_index = stackv->as.local - compiler.locals});
     }
+}
+
+static bool is_numeric_type(type_e type) {
+    return type == TYPE_I32 || type == TYPE_I64 || type == TYPE_F32 ||
+           type == TYPE_F64 || is_pointer(type);
 }
 
 static void expression(prec_e precedence) {
@@ -712,21 +905,37 @@ static void expression(prec_e precedence) {
 static void number() {
     stackv_t *stackv = &compiler.stack[compiler.stack_count++];
     stackv->type = VTYPE_CONST;
-    stackv->ctype = TYPE_I32;
-    stackv->as.const_value = atoi(parser.previous.start);
+    stackv->offset = 0;
+
+    bool has_decimal = false;
+    for (int i = 0; i < parser.previous.length; i++) {
+        if (parser.previous.start[i] == '.') {
+            has_decimal = true;
+            break;
+        }
+    }
+
+    if (!has_decimal) {
+        stackv->ctype = TYPE_I32;
+        stackv->as.c.i32 = atoi(parser.previous.start);
+    } else {
+        stackv->ctype = TYPE_F32;
+        stackv->as.c.f32 = atof(parser.previous.start);
+    }
 }
 
 static void boolean() {
     stackv_t *stackv = &compiler.stack[compiler.stack_count++];
     stackv->type = VTYPE_CONST;
     stackv->ctype = TYPE_BOOL;
+    stackv->offset = 0;
 
     switch (parser.previous.type) {
     case TOKEN_TRUE:
-        stackv->as.const_value = 1;
+        stackv->as.c.i32 = 1;
         break;
     case TOKEN_FALSE:
-        stackv->as.const_value = 0;
+        stackv->as.c.i32 = 0;
         break;
     default:
         error("Expected a boolean literal.");
@@ -734,29 +943,68 @@ static void boolean() {
     }
 }
 
-static bool is_numeric_type(type_e type) {
-    return type == TYPE_I32 || type == TYPE_I64 || type == TYPE_F32 ||
-           type == TYPE_F64 || is_pointer(type);
-}
-
 static void binary() {
     tokentype_e op_type = parser.previous.type;
     prec_e precedence = get_rule(op_type)->precedence;
 
+    stackv_t *a = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(a);
+
     expression((prec_e)(precedence + 1));
 
-    stackv_t *a = &compiler.stack[compiler.stack_count - 2];
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
     compiler.stack_count -= 2;
 
-    materialize_vstack(a);
+    if (!is_numeric_type(a->ctype) || !is_numeric_type(b->ctype)) {
+        error("Binary operator requires numeric types.");
+        return;
+    }
+
+    if (is_pointer(a->ctype) || is_pointer(b->ctype)) {
+        if (op_type != TOKEN_PLUS && op_type != TOKEN_MINUS) {
+            error("Binary operator can only be applied to pointer types with "
+                  "'+' or '-'.");
+            return;
+        }
+
+        type_e other_type = is_pointer(a->ctype) ? b->ctype : a->ctype;
+        if (is_pointer(other_type)) {
+            type_e atype = a->ctype & ~TYPE_POINTER_FLAG;
+            type_e btype = b->ctype & ~TYPE_POINTER_FLAG;
+            if (atype != btype) {
+                error("Binary operator cannot be applied to two different "
+                      "pointer "
+                      "types.");
+                return;
+            }
+        } else if (!is_type(other_type, TYPE_I32) &&
+                   !is_type(other_type, TYPE_I64)) {
+            error(
+                "Pointer arithmetic can only be performed with integer types.");
+            return;
+        }
+    }
+
     materialize_vstack(b);
+
+    if (!is_pointer(a->ctype) && !is_pointer(b->ctype) &&
+        a->ctype != b->ctype) {
+        if (isv_const(b->type)) {
+            b->as.c = cast_const(b->as.c, b->ctype, a->ctype);
+        } else {
+            write_op((op_t){.type = OP_CONVERT,
+                            .value_type = b->ctype,
+                            .as.convert.from = b->ctype,
+                            .as.convert.to = a->ctype});
+        }
+    }
 
     type_e target_type = is_pointer(b->ctype) ? b->ctype : a->ctype;
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
     result->ctype = target_type;
+    result->offset = 0;
 
     switch (op_type) {
     case TOKEN_PLUS:
@@ -782,30 +1030,58 @@ static void unary() {
 
     expression(PREC_UNARY);
 
-    stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
-    compiler.stack_count--; // Pop the last stack value
-
-    materialize_vstack(last_stackv);
+    stackv_t last_stackv = compiler.stack[--compiler.stack_count];
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
-    result->ctype = last_stackv->ctype;
+    result->ctype = last_stackv.ctype;
     result->offset = 0;
 
     switch (op_type) {
     case TOKEN_MINUS:
-        if (!is_numeric_type(last_stackv->ctype)) {
+        if (!is_numeric_type(last_stackv.ctype)) {
             error("Unary '-' operator requires a numeric type.");
             return;
         }
 
-        write_op((op_t){.type = OP_CONST,
-                        .value_type = last_stackv->ctype,
-                        .as.const_value = -1});
-        write_op((op_t){.type = OP_MUL, .value_type = last_stackv->ctype});
+        if (is_pointer(last_stackv.ctype)) {
+            error("Unary '-' operator cannot be applied to pointer types.");
+            return;
+        }
+
+        op_t negate_op = {.type = OP_CONST, .value_type = last_stackv.ctype};
+        if (is_type(last_stackv.ctype, TYPE_I32)) {
+            negate_op.as.c.i32 = -1;
+        } else if (is_type(last_stackv.ctype, TYPE_I64)) {
+            negate_op.as.c.i64 = -1;
+        } else if (is_type(last_stackv.ctype, TYPE_F32)) {
+            negate_op.as.c.f32 = -1.0f;
+        } else if (is_type(last_stackv.ctype, TYPE_F64)) {
+            negate_op.as.c.f64 = -1.0;
+        } else {
+            error("Unsupported type for unary '-' operator.");
+            return;
+        }
+
+        materialize_vstack(&last_stackv);
+        write_op((op_t){.type = OP_MUL, .value_type = last_stackv.ctype});
         break;
     case TOKEN_BANG:
+        if (!is_type(last_stackv.ctype, TYPE_BOOL)) {
+            if (isv_const(last_stackv.type)) {
+                last_stackv.as.c =
+                    cast_const(last_stackv.as.c, last_stackv.ctype, TYPE_BOOL);
+            } else {
+                write_op((op_t){.type = OP_CONVERT,
+                                .value_type = last_stackv.ctype,
+                                .as.convert.from = last_stackv.ctype,
+                                .as.convert.to = TYPE_BOOL});
+            }
+        }
+
+        materialize_vstack(&last_stackv);
         result->ctype = TYPE_BOOL;
+
         write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
         break;
     default:
@@ -815,6 +1091,28 @@ static void unary() {
 }
 
 static void group() {
+    type_e type;
+    if ((type = match_type())) { // explicit type casting
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after type.");
+
+        expression(PREC_UNARY);
+
+        stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
+        if (isv_const(last_stackv->type)) {
+            last_stackv->as.c =
+                cast_const(last_stackv->as.c, last_stackv->ctype, type);
+        } else {
+            materialize_vstack(last_stackv);
+            write_op((op_t){.type = OP_CONVERT,
+                            .value_type = last_stackv->ctype,
+                            .as.convert.from = last_stackv->ctype,
+                            .as.convert.to = type});
+        }
+
+        last_stackv->ctype = type;
+        return;
+    }
+
     expression(PREC_ASSIGNMENT);
     if (!match(TOKEN_RIGHT_PAREN)) {
         error("Expected ')' after expression.");
@@ -1016,37 +1314,55 @@ static void dereference() {
 }
 
 static void assignment() {
-    stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
-    if (!isv_lvalue(last_stackv->type)) {
+    stackv_t *vtarget = &compiler.stack[compiler.stack_count - 1];
+    if (!isv_lvalue(vtarget->type)) {
         error("Invalid assignment target.");
         return;
     }
 
-    last_stackv->type &= ~VTYPE_LVALUE;
-    materialize_vstack(last_stackv);
+    vtarget->type &= ~VTYPE_LVALUE;
+    materialize_vstack(vtarget);
 
     expression(PREC_ASSIGNMENT);
 
-    stackv_t *value_stackv = &compiler.stack[compiler.stack_count - 1];
+    stackv_t *vvalue = &compiler.stack[compiler.stack_count - 1];
     compiler.stack_count -= 2; // Pop both the lvalue and the value
 
-    materialize_vstack(value_stackv);
-    store_vstack(last_stackv);
+    if (vvalue->ctype != vtarget->ctype) {
+        if (isv_const(vvalue->type)) {
+            vvalue->as.c =
+                cast_const(vvalue->as.c, vvalue->ctype, vtarget->ctype);
+            vvalue->ctype = vtarget->ctype;
+        }
+    }
+
+    materialize_vstack(vvalue);
+
+    if (vvalue->ctype != vtarget->ctype) {
+        write_op((op_t){.type = OP_CONVERT,
+                        .value_type = vtarget->ctype,
+                        .as.convert.from = vvalue->ctype,
+                        .as.convert.to = vtarget->ctype});
+    }
+
+    store_vstack(vtarget);
 }
 
 static void character() {
     stackv_t *stackv = &compiler.stack[compiler.stack_count++];
     stackv->type = VTYPE_CONST;
     stackv->ctype = TYPE_CHAR;
+    stackv->offset = 0;
 
     char c = parser.previous.start[1];
-    stackv->as.const_value = (int)c;
+    stackv->as.c.i32 = (int)c;
 }
 
 static void string() {
     stackv_t *stackv = &compiler.stack[compiler.stack_count++];
     stackv->type = VTYPE_CONST;
     stackv->ctype = TYPE_CHAR | TYPE_POINTER_FLAG;
+    stackv->offset = 0;
 
     const_t *string_const = &compiler.consts[compiler.const_count++];
 
@@ -1056,7 +1372,7 @@ static void string() {
     string_const->size = parser.previous.length - 2;
     string_const->as.string = parser.previous.start + 1;
 
-    stackv->as.const_value = 16384 + compiler.data_offset;
+    stackv->as.c.i32 = 16384 + compiler.data_offset;
     compiler.data_offset += string_const->size + 1;
 }
 
@@ -1080,10 +1396,10 @@ static void bracket() {
     }
 
     materialize_vstack(index_stackv);
-    write_op((op_t){.type = OP_CONST,
-                    .value_type = TYPE_I32,
-                    .as.const_value =
-                        get_type_size(element_type & ~TYPE_POINTER_FLAG)});
+    write_op(
+        (op_t){.type = OP_CONST,
+               .value_type = TYPE_I32,
+               .as.c.i32 = get_type_size(element_type & ~TYPE_POINTER_FLAG)});
     write_op((op_t){.type = OP_MUL, .value_type = TYPE_I32});
     write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
 
@@ -1111,7 +1427,8 @@ static void sizeof_prefix() {
     stackv_t *stackv = &compiler.stack[compiler.stack_count++];
     stackv->type = VTYPE_CONST;
     stackv->ctype = TYPE_I32;
-    stackv->as.const_value = size;
+    stackv->offset = 0;
+    stackv->as.c.i32 = size;
 
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'sizeof'.");
 }
@@ -1132,6 +1449,7 @@ static void equality() {
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
     result->ctype = TYPE_BOOL;
+    result->offset = 0;
 
     switch (op_type) {
     case TOKEN_EQUAL_EQUAL:
@@ -1170,8 +1488,7 @@ static void and() {
     write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
 
     write_op((op_t){.type = OP_ELSE, .value_type = TYPE_BOOL});
-    write_op(
-        (op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.const_value = 0});
+    write_op((op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.c.i32 = 0});
     write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
 
     write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
@@ -1181,6 +1498,7 @@ static void and() {
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
     result->ctype = TYPE_BOOL;
+    result->offset = 0;
 }
 
 static void or() {
@@ -1188,8 +1506,7 @@ static void or() {
     materialize_vstack(a);
 
     write_op((op_t){.type = OP_IFR, .value_type = TYPE_BOOL});
-    write_op(
-        (op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.const_value = 1});
+    write_op((op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.c.i32 = 1});
     write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
 
     write_op((op_t){.type = OP_ELSE, .value_type = TYPE_BOOL});
@@ -1207,6 +1524,7 @@ static void or() {
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
     result->ctype = TYPE_BOOL;
+    result->offset = 0;
 }
 
 parserule_t rules[] = {
@@ -1399,12 +1717,13 @@ static void named_var(type_e type) {
     local->type = type;
     local->is_on_stack = is_type(type, TYPE_STRUCT) && !is_pointer(type);
     local->is_param = false;
+    local->is_absolute = false;
     local->depth = compiler.scope_depth;
 
     compiler.local_count++;
 
     if (is_global) {
-        local->type |= TYPE_ABSOLUTE_FLAG;
+        local->is_absolute = true;
         local->is_on_stack = true;
         local->frame_index = 16384 + compiler.data_offset;
 
@@ -1431,7 +1750,12 @@ static void named_var(type_e type) {
                 global_const->is_local = true;
                 global_const->as.local = last_stackv->as.local;
             } else if (isv_const(last_stackv->type)) {
-                global_const->as.const_value = last_stackv->as.const_value;
+                if (last_stackv->ctype != type) {
+                    global_const->as.c =
+                        cast_const(last_stackv->as.c, last_stackv->ctype, type);
+                } else {
+                    global_const->as.c = last_stackv->as.c;
+                }
             } else {
                 error(
                     "Cannot assign a non-constant value to a global variable.");
@@ -1453,7 +1777,24 @@ static void named_var(type_e type) {
         stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
         compiler.stack_count--; // Pop the last stack value
 
+        if (local->type != last_stackv->ctype) {
+            if (isv_const(last_stackv->type)) {
+                last_stackv->as.c = cast_const(last_stackv->as.c,
+                                               last_stackv->ctype, local->type);
+                last_stackv->ctype = local->type;
+            }
+        }
+
         materialize_vstack(last_stackv);
+        if (local->type != last_stackv->ctype) {
+            if (!isv_const(last_stackv->type)) {
+                write_op((op_t){.type = OP_CONVERT,
+                                .value_type = last_stackv->ctype,
+                                .as.convert.from = last_stackv->ctype,
+                                .as.convert.to = local->type});
+            }
+        }
+
         write_op((op_t){.type = OP_STORE_VAR,
                         .value_type = type,
                         .as.var_index = local - compiler.locals});
@@ -1473,6 +1814,8 @@ static void function(type_e return_type) {
     local->name = name;
     local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     local->is_on_stack = false;
+    local->is_absolute = false;
+    local->is_param = false;
     local->depth = compiler.scope_depth;
 
     if (!compiler.no_op) {
@@ -1511,6 +1854,7 @@ static void function(type_e return_type) {
             local->name = param_name;
             local->type = param_type;
             local->is_on_stack = false;
+            local->is_absolute = false;
             local->is_param = true;
 
             compiler.local_count++;
@@ -1646,53 +1990,43 @@ static void function(type_e return_type) {
         case OP_ADD: {
             op_t *op = &compiler.ops[i];
 
-            if (is_pointer(op->value_type)) {
-                write_string("i32.add\n");
-            } else if (is_type(op->value_type, TYPE_I64)) {
-                write_string("i64.add\n");
-            } else if (is_type(op->value_type, TYPE_I32)) {
-                write_string("i32.add\n");
-            } else {
-                error("Unsupported type for addition.");
-            }
+            write_type(op->value_type);
+            write_string(".add\n");
 
             break;
         }
         case OP_SUB: {
             op_t *op = &compiler.ops[i];
 
-            if (is_pointer(op->value_type)) {
-                write_string("i32.sub\n");
-            } else if (is_type(op->value_type, TYPE_I64)) {
-                write_string("i64.sub\n");
-            } else if (is_type(op->value_type, TYPE_I32)) {
-                write_string("i32.sub\n");
-            } else {
-                error("Unsupported type for subtraction.");
-            }
+            write_type(op->value_type);
+            write_string(".sub\n");
 
             break;
         }
-        case OP_MUL:
-            if (compiler.ops[i].value_type == TYPE_I64) {
-                write_string("i64.mul\n");
-            } else if (compiler.ops[i].value_type == TYPE_I32) {
-                write_string("i32.mul\n");
-            } else {
-                error("Unsupported type for multiplication.");
-            }
+        case OP_MUL: {
+            op_t *op = &compiler.ops[i];
+
+            write_type(op->value_type);
+            write_string(".mul\n");
 
             break;
-        case OP_DIV:
-            if (compiler.ops[i].value_type == TYPE_I64) {
-                write_string("i64.div_s\n");
-            } else if (compiler.ops[i].value_type == TYPE_I32) {
-                write_string("i32.div_s\n");
+        }
+        case OP_DIV: {
+            op_t *op = &compiler.ops[i];
+
+            write_type(op->value_type);
+            if (is_type(op->value_type, TYPE_I32) ||
+                is_type(op->value_type, TYPE_I64)) {
+                write_string(".div_s\n");
+            } else if (is_type(op->value_type, TYPE_F32) ||
+                       is_type(op->value_type, TYPE_F64)) {
+                write_string(".div\n");
             } else {
                 error("Unsupported type for division.");
             }
 
             break;
+        }
         case OP_NEGATE:
             write_string("i32.eqz\n");
             break;
@@ -1701,7 +2035,7 @@ static void function(type_e return_type) {
             local_t *local = &compiler.locals[op->as.var_index];
             int offset = op->offset;
 
-            if (is_absolute(local->type)) {
+            if (local->is_absolute) {
                 write_string(";; Get address of absolute variable\n");
                 write_string("i32.const ");
                 char buffer[32];
@@ -1836,23 +2170,141 @@ static void function(type_e return_type) {
 
             break;
         }
-        case OP_CONST:
-            write_string("i32.const ");
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d",
-                     compiler.ops[i].as.const_value);
-            write_string(buffer);
-            write_string("\n");
-            break;
-        case OP_CONVERT: {
+        case OP_CONST: {
             op_t *op = &compiler.ops[i];
 
-            if (op->as.convert.from == TYPE_I32 &&
-                op->as.convert.to == TYPE_I64) {
-                write_string("i64.extend_i32_s\n");
-            } else if (op->as.convert.from == TYPE_I64 &&
-                       op->as.convert.to == TYPE_I32) {
-                write_string("i32.wrap_i64\n");
+            write_type(op->value_type);
+            write_string(".const ");
+            write_const(op->as.c, op->value_type);
+            write_string("\n");
+
+            break;
+        }
+        case OP_CONVERT: {
+            op_t *op = &compiler.ops[i];
+            type_e from = op->as.convert.from;
+            type_e to = op->as.convert.to;
+
+            if (is_pointer(from) && is_pointer(to)) {
+                // no conversion needed
+            } else if (is_pointer(from)) {
+                if (is_type(to, TYPE_I32)) {
+                    // no conversion needed
+                } else if (is_type(to, TYPE_I64)) {
+                    write_string("i64.extend_i32_s\n");
+                } else if (is_type(to, TYPE_F32)) {
+                    error("Cannot convert pointer to f32.");
+                } else if (is_type(to, TYPE_F64)) {
+                    error("Cannot convert pointer to f64.");
+                } else if (is_type(to, TYPE_CHAR)) {
+                    write_string("i32.extend8_s\n");
+                } else if (is_type(to, TYPE_BOOL)) {
+                    write_string("i32.const 0\n");
+                    write_string("i32.ne\n");
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_pointer(to)) {
+                if (is_type(from, TYPE_I32) || is_type(from, TYPE_BOOL) ||
+                    is_type(from, TYPE_CHAR)) {
+                    // no conversion needed
+                } else if (is_type(from, TYPE_I64)) {
+                    write_string("i32.wrap_i64\n");
+                } else if (is_type(from, TYPE_F32)) {
+                    error("Cannot convert f32 to pointer.");
+                } else if (is_type(from, TYPE_F64)) {
+                    error("Cannot convert f64 to pointer.");
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_type(to, TYPE_I32)) {
+                if (is_type(from, TYPE_I32) || is_type(from, TYPE_BOOL) ||
+                    is_type(from, TYPE_CHAR)) {
+                    // no conversion needed
+                } else if (is_type(from, TYPE_I64)) {
+                    write_string("i32.wrap_i64\n");
+                } else if (is_type(from, TYPE_F32)) {
+                    write_string("i32.trunc_f32_s\n");
+                } else if (is_type(from, TYPE_F64)) {
+                    write_string("i32.trunc_f64_s\n");
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_type(to, TYPE_I64)) {
+                if (is_type(from, TYPE_I32) || is_type(from, TYPE_BOOL) ||
+                    is_type(from, TYPE_CHAR)) {
+                    write_string("i64.extend_i32_s\n");
+                } else if (is_type(from, TYPE_I64)) {
+                    // no conversion needed
+                } else if (is_type(from, TYPE_F32)) {
+                    write_string("i64.trunc_f32_s\n");
+                } else if (is_type(from, TYPE_F64)) {
+                    write_string("i64.trunc_f64_s\n");
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_type(to, TYPE_F32)) {
+                if (is_type(from, TYPE_I32) || is_type(from, TYPE_BOOL) ||
+                    is_type(from, TYPE_CHAR)) {
+                    write_string("f32.convert_i32_s\n");
+                } else if (is_type(from, TYPE_I64)) {
+                    write_string("f32.convert_i64_s\n");
+                } else if (is_type(from, TYPE_F32)) {
+                    // no conversion needed
+                } else if (is_type(from, TYPE_F64)) {
+                    write_string("f32.demote_f64\n");
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_type(to, TYPE_F64)) {
+                if (is_type(from, TYPE_I32) || is_type(from, TYPE_BOOL) ||
+                    is_type(from, TYPE_CHAR)) {
+                    write_string("f64.convert_i32_s\n");
+                } else if (is_type(from, TYPE_I64)) {
+                    write_string("f64.convert_i64_s\n");
+                } else if (is_type(from, TYPE_F32)) {
+                    write_string("f64.promote_f32\n");
+                } else if (is_type(from, TYPE_F64)) {
+                    // no conversion needed
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_type(to, TYPE_BOOL)) {
+                if (is_type(from, TYPE_I32) || is_type(from, TYPE_CHAR)) {
+                    write_string("i32.const 0\n");
+                    write_string("i32.ne\n");
+                } else if (is_type(from, TYPE_I64)) {
+                    write_string("i64.const 0\n");
+                    write_string("i64.ne\n");
+                } else if (is_type(from, TYPE_F32)) {
+                    write_string("f32.const 0.0\n");
+                    write_string("f32.ne\n");
+                } else if (is_type(from, TYPE_F64)) {
+                    write_string("f64.const 0.0\n");
+                    write_string("f64.ne\n");
+                } else if (is_type(from, TYPE_BOOL)) {
+                    // no conversion needed
+                } else {
+                    error("Unsupported type conversion.");
+                }
+            } else if (is_type(to, TYPE_CHAR)) {
+                if (is_type(from, TYPE_I32)) {
+                    write_string("i32.extend8_s\n");
+                } else if (is_type(from, TYPE_I64)) {
+                    write_string("i32.wrap_i64\n");
+                    write_string("i32.extend8_s\n");
+                } else if (is_type(from, TYPE_F32)) {
+                    write_string("i32.trunc_f32_s\n");
+                    write_string("i32.extend8_s\n");
+                } else if (is_type(from, TYPE_F64)) {
+                    write_string("i32.trunc_f64_s\n");
+                    write_string("i32.extend8_s\n");
+                } else if (is_type(from, TYPE_CHAR) ||
+                           is_type(from, TYPE_BOOL)) {
+                    // no conversion needed
+                } else {
+                    error("Unsupported type conversion.");
+                }
             } else {
                 error("Unsupported type conversion.");
             }
@@ -1922,10 +2374,15 @@ static void function(type_e return_type) {
             if (is_pointer(op->value_type)) {
                 write_string("call $print_i32\n");
             } else if (is_type(op->value_type, TYPE_I32) ||
-                       is_type(op->value_type, TYPE_BOOL)) {
+                       is_type(op->value_type, TYPE_BOOL) ||
+                       is_type(op->value_type, TYPE_CHAR)) {
                 write_string("call $print_i32\n");
             } else if (is_type(op->value_type, TYPE_I64)) {
                 write_string("call $print_i64\n");
+            } else if (is_type(op->value_type, TYPE_F32)) {
+                write_string("call $print_f32\n");
+            } else if (is_type(op->value_type, TYPE_F64)) {
+                write_string("call $print_f64\n");
             } else {
                 error("Unsupported type for print.");
             }
@@ -2079,6 +2536,8 @@ static void module() {
     write_string("(module\n");
     write_string("(import \"core\" \"print\" (func $print_i32 (param i32)))\n");
     write_string("(import \"core\" \"print\" (func $print_i64 (param i64)))\n");
+    write_string("(import \"core\" \"print\" (func $print_f32 (param f32)))\n");
+    write_string("(import \"core\" \"print\" (func $print_f64 (param f64)))\n");
     write_string("(import \"core\" \"putc\" (func $putc (param i32)))\n");
     write_string("(import \"core\" \"puts\" (func $puts (param i32)))\n");
     write_string("(memory $0 1)\n");
@@ -2089,6 +2548,8 @@ static void module() {
     putc_local->name.length = 4;
     putc_local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     putc_local->is_on_stack = false;
+    putc_local->is_absolute = false;
+    putc_local->is_param = false;
     putc_local->depth = 0;
 
     fundef_t *putc_fundef = &compiler.fundefs[compiler.fundef_count++];
@@ -2107,6 +2568,8 @@ static void module() {
     puts_local->name.length = 4;
     puts_local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     puts_local->is_on_stack = false;
+    puts_local->is_absolute = false;
+    puts_local->is_param = false;
     puts_local->depth = 0;
 
     fundef_t *puts_fundef = &compiler.fundefs[compiler.fundef_count++];
@@ -2122,8 +2585,10 @@ static void module() {
     local_t *heap_base_local = &compiler.locals[compiler.local_count++];
     heap_base_local->name.start = "__heap_base";
     heap_base_local->name.length = 11;
-    heap_base_local->type = TYPE_CHAR | TYPE_POINTER_FLAG | TYPE_ABSOLUTE_FLAG;
+    heap_base_local->type = TYPE_CHAR | TYPE_POINTER_FLAG;
     heap_base_local->is_on_stack = true;
+    heap_base_local->is_absolute = true;
+    heap_base_local->is_param = false;
     heap_base_local->depth = 0;
     heap_base_local->frame_index = 0;
 
@@ -2180,8 +2645,6 @@ static void module() {
             write_string("\\00");
         } else if (is_pointer(const_value->type)) {
             if (const_value->is_local) {
-                printf("Writing pointer to local: %d\n",
-                       const_value->as.local->frame_index);
                 for (int j = 0; j < 4; ++j) {
                     unsigned char byte =
                         (const_value->as.local->frame_index >> (j * 8)) & 0xFF;
@@ -2189,15 +2652,45 @@ static void module() {
                     write_string(buffer);
                 }
             } else {
-                printf("Writing pointer constant: %d\n",
-                       const_value->as.const_value);
                 for (int j = 0; j < 4; ++j) {
                     unsigned char byte =
-                        (const_value->as.const_value >> (j * 8)) & 0xFF;
+                        (const_value->as.c.i32 >> (j * 8)) & 0xFF;
                     snprintf(buffer, sizeof(buffer), "\\%02x", byte);
                     write_string(buffer);
                 }
             }
+        } else if (is_type(const_value->type, TYPE_I32)) {
+            for (int j = 0; j < 4; ++j) {
+                unsigned char byte = (const_value->as.c.i32 >> (j * 8)) & 0xFF;
+                snprintf(buffer, sizeof(buffer), "\\%02x", byte);
+                write_string(buffer);
+            }
+        } else if (is_type(const_value->type, TYPE_I64)) {
+            for (int j = 0; j < 8; ++j) {
+                unsigned char byte = (const_value->as.c.i64 >> (j * 8)) & 0xFF;
+                snprintf(buffer, sizeof(buffer), "\\%02x", byte);
+                write_string(buffer);
+            }
+        } else if (is_type(const_value->type, TYPE_F32)) {
+            uint32_t f32_bits;
+            memcpy(&f32_bits, &const_value->as.c.f32, sizeof(f32_bits));
+            for (int j = 0; j < 4; ++j) {
+                unsigned char byte = (f32_bits >> (j * 8)) & 0xFF;
+                snprintf(buffer, sizeof(buffer), "\\%02x", byte);
+                write_string(buffer);
+            }
+        } else if (is_type(const_value->type, TYPE_F64)) {
+            uint64_t f64_bits;
+            memcpy(&f64_bits, &const_value->as.c.f64, sizeof(f64_bits));
+            for (int j = 0; j < 8; ++j) {
+                unsigned char byte = (f64_bits >> (j * 8)) & 0xFF;
+                snprintf(buffer, sizeof(buffer), "\\%02x", byte);
+                write_string(buffer);
+            }
+        } else if (is_type(const_value->type, TYPE_BOOL)) {
+            unsigned char byte = const_value->as.c.i32 != 0 ? 1 : 0;
+            snprintf(buffer, sizeof(buffer), "\\%02x\\00\\00\\00", byte);
+            write_string(buffer);
         } else {
             error("Unsupported constant type for data segment.");
         }
