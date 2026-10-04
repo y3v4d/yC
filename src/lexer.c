@@ -131,6 +131,10 @@ static tokentype_e identifier_type() {
                 return check_keyword(2, 1, "2", TOKEN_I32);
             case '6':
                 return check_keyword(2, 1, "4", TOKEN_I64);
+            case '8':
+                return check_keyword(2, 0, "", TOKEN_I8);
+            case '1':
+                return check_keyword(2, 1, "6", TOKEN_I16);
             }
         }
     case 'f':

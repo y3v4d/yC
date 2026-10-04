@@ -147,6 +147,12 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_OR:
         printf("TOKEN_OR");
         break;
+    case TOKEN_I8:
+        printf("TOKEN_I8");
+        break;
+    case TOKEN_I16:
+        printf("TOKEN_I16");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

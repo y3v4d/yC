@@ -12,9 +12,14 @@ f64 hello2 = (i32)15.52;
 i64 hello3 = 123513233;
 bool yoyo = true;
 
+i8 hello5 = 10;
+i16 hello4 = 16;
+
 struct test_t {
     i32 a;
     i32 b;
+    i8 c;
+    i16 d;
 }
 
 void main() {
@@ -22,6 +27,8 @@ void main() {
 
     g.a = 10;
     g.b = 20;
+    g.c = 100;
+    g.d = 300;
 
     i32 result = 10.5 + g.a;
 
@@ -71,4 +78,13 @@ void main() {
     print *(testi + 4);
     print testi[1];
     puts(test2);
+
+    i16 smoll = 300;
+    i8* p_smoll = &smoll;
+
+    print smoll;
+    print p_smoll;
+    print *p_smoll;
+    print p_smoll[0];
+    print p_smoll[1];
 }
