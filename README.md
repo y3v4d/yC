@@ -9,7 +9,7 @@ A (bit bigger) list of features that yC currently supports:
 
 - **Hand-written Lexer** - tokenizes the input source code
 - **Hand-written Parser** - Pratt-parser that generates the WAT output directly (without an AST) in a single pass. In most places it first generates an intermidiate representation in form of simple opcodes which are later lowered to WAT. This is done to simplify the code generation and make it easier to add new features and targets in the future.
-- **Static typing** - yC is a statically typed language, meaning that types are checked at compile time. Current primitive types are: i32, i64, f32 (not supported yet), f64 (not supported yet), bool, void (only as a return type for functions), char
+- **Static typing** - yC is a statically typed language, meaning that types are checked at compile time. Current primitive types are: i8, i16, i32, i64, f32, f64, bool, void (only as a return type for functions), char. Language also supports user-defined types (struct) and pointers, as well as implicit and explicit type casting.
 - **Functions** - can be defined and called with parameters
 - **Structs** - user-defined types that can contain multiple fields
 - **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name.
@@ -44,6 +44,26 @@ To run the provided REPL, use the following command:
 ./build/app
 ```
 
+Currently REPL requires a full fledged main function with every instruction, so it's easier to write the code in the `main.yc` file and compile it by typing 'l' and Enter in the repl input.
+
+To run the compiler on a source file, use the following command:
+
+```bash
+./build/app <source_file>
+```
+
+This will create a build/out.wat and build/out.wasm files on successful compilation.
+
+## Running snake example
+
+To run snake example, first you need to compile the `snake.yc` file using the command above, then install an `http-server` node package **globally** and run the following command:
+
+```bash
+http-server -c-1 build
+```
+
+Then open the `http://localhost:8080` in your browser and you should see the snake game running.
+
 ## Example code
 
 ```c
@@ -76,12 +96,8 @@ void main() {
 ## Roadmap
 
 - Add better error handling and reporting
-- Add better scoping support - currently scopes are only partially supported and there might be some weird bugs related to them
-- Add support for f32 and f64 primitive types
-- Add support for i8 and i16 primitive types
 - Add support for unsigned integer types (u8, u16, u32, u64)
 - Add support for function pointers
-- Add support for explicit type casting
 - Add binary operation support
 - Add support for constructors/destructors for structs (C++ like)
 - Add support for modules and imports/exports
