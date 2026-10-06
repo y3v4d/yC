@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>yc-canvas</title>
+</head>
+<body>
+    <canvas id="canvas" width="320" height="240" style="image-rendering: pixelated;"></canvas>
+    <script>
+        const width = 320;
+        const height = 240;
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+
+        const ctx_buffer = ctx.createImageData(width, height);
+        const keyState = new Array(256).fill(false);
+
+        // 16 color palette
+        const color_map = [
+            0x000000, // #0 Black
+            0x0000AA, // #1 Blue
+            0x00AA00, // #2 Green
+            0x00AAAA, // #3 Cyan
+            0xAA0000, // #4 Red
+            0xAA00AA, // #5 Magenta
+            0xAA5500, // #6 Brown
+            0xAAAAAA, // #7 Light Gray
+            0x555555, // #8 Dark Gray
+            0x5555FF, // #9 Bright Blue
+            0x55FF55, // #10 Bright Green
+            0x55FFFF, // #11 Bright Cyan
+            0xFF5555, // #12 Bright Red
+            0xFF55FF, // #13 Bright Magenta
+            0xFFFF55, // #14 Bright Yellow
+            0xFFFFFF  // #15 White
+        ]
+
+        async function main() {
+            const wasm = await fetch("build/out.wasm");
+            const buffer = await wasm.arrayBuffer();
+
+            const { instance } = await WebAssembly.instantiate(buffer, {
+                core: {
+                    print: (arg) => {
+                        console.log(arg);
+                    },
+                    putc: (arg) => {
+                        stdout.write(String.fromCharCode(arg));
+                    },
+                    puts: (arg) => {
+                        let length = 0;
+                        const bytes = new Uint8Array(instance.exports.memory.buffer, arg);
+                        for (let i = 0; ; i++) {
+                            if (bytes[i] === 0) {
+                                break;
+                            }
+                            length++;
+                        }
+
+                        const bytesToDecode = bytes.slice(0, length);
+                        const str = new TextDecoder("utf-8").decode(bytesToDecode);
+
+                        console.log(str);
+                    },
+                    rand: (from, to) => {
+                        return Math.floor(Math.random() * (to - from + 1)) + from;
+                    },
+                    get_key: (key) => {
+                        const code = key & 0xFF;
+                        if (code < 0 || code >= keyState.length) {
+                            console.error(`get_key: Invalid key code: ${code}`);
+                            return 0;
+                        }
+
+                        return keyState[code];
+                    }
+                },
+                ctx: {
+                    ctx_fill: (color) => {
+                        let c = color_map[color];
+                        c = ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF) | 0xFF000000;
+
+                        const view32 = new Uint32Array(ctx_buffer.data.buffer);
+                        view32.fill(c);
+                    },
+                    ctx_put_pixel: (x, y, color) => {
+                        if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) {
+                            console.error(`put_pixel: Coordinates out of bounds: (${x}, ${y})`);
+                            return;
+                        }
+
+                        if (color < 0 || color >= color_map.length) {
+                            console.error(`put_pixel: Invalid color index: ${color}`);
+                            return;
+                        }
+
+                        const colorValue = color_map[color];
+                        const r = (colorValue >> 16) & 0xFF;
+                        const g = (colorValue >> 8) & 0xFF;
+                        const b = colorValue & 0xFF;
+
+                        const index = (y * canvas.width + x) * 4;
+
+                        ctx_buffer.data[index] = r;
+                        ctx_buffer.data[index + 1] = g;
+                        ctx_buffer.data[index + 2] = b;
+                        ctx_buffer.data[index + 3] = 255; // Alpha channel
+                    }
+                }
+            });
+
+            let t = 0;
+
+            const loop = () => {
+                instance.exports.mainloop();
+                ctx.putImageData(ctx_buffer, 0, 0);
+
+                requestAnimationFrame(loop);
+            };
+
+            instance.exports.main();
+            loop();
+        }
+
+        document.addEventListener("keydown", (event) => {
+            keyState[event.keyCode] = true;
+        });
+
+        document.addEventListener("keyup", (event) => {
+            keyState[event.keyCode] = false;
+        });
+
+        main();
+    </script>
+</body>
+</html>

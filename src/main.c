@@ -6,25 +6,35 @@
 #include "compiler.h"
 #include "debug.h"
 
-static void execute_wasm(const char *wasm_code) {
-    // save code to build/out.wat file
+static bool compile_wat(const char *wat) {
+    // save wat to build/out.wat file
     FILE *file = fopen("build/out.wat", "w");
     if (!file) {
         fprintf(stderr, "Failed to open build/out.wat for writing.\n");
-        return;
+        return false;
     }
 
-    fprintf(file, "%s", wasm_code);
+    fprintf(file, "%s", wat);
     fclose(file);
 
     // execute wat2wasm build/out.wat -o build/out.wasm
     int ret = system("wat2wasm build/out.wat -o build/out.wasm");
     if (ret != 0) {
         fprintf(stderr, "Failed to execute wat2wasm.\n");
+        return false;
+    }
+
+    return true;
+}
+
+static void execute_wasm(const char *wasm_code) {
+    bool result = compile_wat(wasm_code);
+    if (!result) {
+        fprintf(stderr, "Failed to compile WAT to WASM.\n");
         return;
     }
 
-    ret = system("node index.js");
+    int ret = system("node index.js");
     if (ret != 0) {
         fprintf(stderr, "Failed to execute node index.js.\n");
         return;
@@ -101,7 +111,49 @@ static void repl() {
     printf("REPL exited.\n");
 }
 
-int main() {
-    repl();
+static void compile_path(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        fprintf(stderr, "Failed to open file: %s\n", path);
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    char *source = malloc(length + 1);
+    if (!source) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        fclose(file);
+        return;
+    }
+
+    size_t bytes_read = fread(source, 1, length, file);
+    source[bytes_read] = '\0';
+    fclose(file);
+
+    char *output = compile(source);
+    free(source);
+
+    if (output) {
+#ifdef DEBUG_OUTPUT
+        printf("Compiled output:\n%s\n", output);
+#endif
+        compile_wat(output);
+    } else {
+        printf("Compilation failed.\n");
+    }
+}
+
+int main(int argc, const char **argv) {
+    if (argc == 1) {
+        repl();
+    } else if (argc == 2) {
+        compile_path(argv[1]);
+    } else {
+        printf("Usage: %s [source_file]\n", argv[0]);
+    }
+
     return 0;
 }

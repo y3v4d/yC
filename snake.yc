@@ -1,0 +1,276 @@
+i32* bump_pointer = &__heap_base;
+char* malloc(i32 n) {
+    i32* r = bump_pointer;
+    bump_pointer = bump_pointer + n;
+
+    return r;
+}
+
+i32 PLAYER_MAX_SIZE = 128;
+
+struct entity_t {
+    i32 x;
+    i32 y;
+    i32 color;
+}
+
+struct player_t {
+    entity_t ent;
+
+    i8* body;
+    i32 size;
+    i32 dir;
+}
+
+i32 w = 320;
+i32 h = 240;
+i32 s = 8;
+i32 grid_w = 0;
+i32 grid_h = 0;
+i32 tick = 0;
+bool game_over = false;
+
+player_t player;
+entity_t apple;
+
+void ctx_draw_rect(i32 x, i32 y, i32 w, i32 h, i32 c) {
+    i32 rx = 0;
+    i32 ry = 0;
+
+    while(ry < h) {
+        while(rx < w) {
+            ctx_put_pixel(x + rx, y + ry, c);
+            rx = rx + 1;
+        }
+
+        rx = 0;
+        ry = ry + 1;
+    }
+}
+
+void entity_draw(entity_t* e) {
+    i32 rx = (*e).x * s;
+    i32 ry = (*e).y * s;
+    i32 c = (*e).color;
+
+    ctx_draw_rect(rx, ry, s, s, c);
+}
+
+void player_draw_head(i32 x, i32 y, i32 c, i32 dir) {
+    if(dir == 0) {
+        ctx_draw_rect(x * s, y * s, s, s, c);
+        ctx_draw_rect(x * s + 2, y * s + 2, 2, 2, 0);
+    }
+
+    if(dir == 1) {
+        ctx_draw_rect(x * s, y * s, s, s, c);
+        ctx_draw_rect(x * s, y * s + 4, 2, 2, 0);
+        ctx_draw_rect(x * s + 6, y * s + 4, 2, 2, 0);
+    }
+
+    if(dir == 2) {
+        ctx_draw_rect(x * s, y * s, s, s, c);
+        ctx_draw_rect(x * s + 4, y * s + 2, 2, 2, 0);
+    }
+
+    if(dir == 3) {
+        ctx_draw_rect(x * s, y * s, s, s, c);
+        ctx_draw_rect(x * s, y * s + 4, 2, 2, 0);
+        ctx_draw_rect(x * s + 6, y * s + 4, 2, 2, 0);
+    }
+}
+
+void player_draw(player_t* p) {
+    i32 x = (*p).ent.x;
+    i32 y = (*p).ent.y;
+    i32 size = (*p).size;
+
+    for(i32 i = 0; i < (*p).size; i = i + 1) {
+        i32 dir = (*p).body[i];
+
+        if(i != 0) {
+            ctx_draw_rect(x * s, y * s, s, s, (*p).ent.color);
+        }
+
+        if(dir == 0) {
+            x = x - 1;
+        }
+
+        if(dir == 1) {
+            y = y - 1;
+        }
+
+        if(dir == 2) {
+            x = x + 1;
+        }
+
+        if(dir == 3) {
+            y = y + 1;
+        }
+
+        if(x < 0) {
+            x = grid_w - 1;
+        }
+
+        if(x >= grid_w) {
+            x = 0;
+        }
+
+        if(y < 0) {
+            y = grid_h - 1;
+        }
+
+        if(y >= grid_h) {
+            y = 0;
+        }
+    }
+
+    player_draw_head((*p).ent.x, (*p).ent.y, (*p).ent.color, (*p).body[0]);
+}
+
+void player_init(player_t* p) {
+    (*p).ent.x = 4;
+    (*p).ent.y = 4;
+    (*p).ent.color = 2;
+    (*p).body = malloc(PLAYER_MAX_SIZE * sizeof(i8));
+    (*p).size = 3;
+    (*p).dir = 4;
+
+    for(i32 i = 0; i < PLAYER_MAX_SIZE; i = i + 1) {
+        (*p).body[i] = 4;
+    }
+}
+
+void apple_init(entity_t* e) {
+    (*e).x = rand(0, grid_w - 1);
+    (*e).y = rand(0, grid_h - 1);
+    (*e).color = 12;
+}
+
+void mainloop() {
+    if(game_over) {
+        return;
+    }
+
+    if(get_key('A')) {
+        player.dir = 2;
+    }
+
+    if(get_key('D')) {
+        player.dir = 0;
+    }
+
+    if(get_key('W')) {
+        player.dir = 3;
+    }
+
+    if(get_key('S')) {
+        player.dir = 1;
+    }
+
+    if(tick == 0) {
+        for(i32 i = player.size - 1; i > 0; i = i - 1) {
+            player.body[i] = player.body[i - 1];
+        }
+
+        player.body[0] = player.dir;
+
+        if(player.body[0] == 0) {
+            player.ent.x = player.ent.x + 1;
+        }
+
+        if(player.body[0] == 1) {
+            player.ent.y = player.ent.y + 1;
+        }
+
+        if(player.body[0] == 2) {
+            player.ent.x = player.ent.x - 1;
+        }
+
+        if(player.body[0] == 3) {
+            player.ent.y = player.ent.y - 1;
+        }
+
+        if(player.ent.x < 0) {
+            player.ent.x = grid_w - 1;
+        }
+
+        if(player.ent.x >= grid_w) {
+            player.ent.x = 0;
+        }
+
+        if(player.ent.y < 0) {
+            player.ent.y = grid_h - 1;
+        }
+
+        if(player.ent.y >= grid_h) {
+            player.ent.y = 0;
+        }
+
+        if(player.ent.x == apple.x && player.ent.y == apple.y) {
+            apple_init(&apple);
+            player.size = player.size + 1;
+        }
+
+
+        i32 x = player.ent.x;
+        i32 y = player.ent.y;
+
+        for(i32 i = 0; i < player.size - 1; i = i + 1) {
+            i32 d = player.body[i];
+
+            if(d == 0) {
+                x = x - 1;
+            }
+
+            if(d == 1) {
+                y = y - 1;
+            }
+
+            if(d == 2) {
+                x = x + 1;
+            }
+
+            if(d == 3) {
+                y = y + 1;
+            }
+
+            if(x < 0) {
+                x = grid_w - 1;
+            }
+
+            if(x >= grid_w) {
+                x = 0;
+            }
+
+            if(y < 0) {
+                y = grid_h - 1;
+            }
+
+            if(y >= grid_h) {
+                y = 0;
+            }
+
+            if(d != 4 && player.ent.x == x && player.ent.y == y) {
+                game_over = true;
+            }
+        }
+    }
+
+    tick = tick + 1;
+    if(tick >= 16) {
+        tick = 0;
+    }
+
+    ctx_fill(10);
+    entity_draw(&apple);
+    player_draw(&player);
+}
+
+void main() {
+    grid_w = w / s;
+    grid_h = h / s;
+
+    player_init(&player);
+    apple_init(&apple);
+}

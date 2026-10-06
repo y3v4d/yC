@@ -74,7 +74,8 @@ typedef enum {
     OP_LESS,
     OP_GREATER_EQUAL,
     OP_LESS_EQUAL,
-    OP_EQZ
+    OP_EQZ,
+    OP_RETURN
 } optype_e;
 
 typedef union {
@@ -803,6 +804,12 @@ static void write_string(const char *data) {
 
     while ((c = *data++) != '\0') {
         *compiler.current++ = c;
+    }
+}
+
+static void write_string_length(const char *data, int length) {
+    for (int i = 0; i < length; i++) {
+        *compiler.current++ = data[i];
     }
 }
 
@@ -1539,14 +1546,14 @@ static void sizeof_prefix() {
 static void equality() {
     tokentype_e op_type = parser.previous.type;
 
+    stackv_t *a = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(a);
+
     expression(PREC_EQUALITY + 1);
 
-    stackv_t *a = &compiler.stack[compiler.stack_count - 2];
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
-
     compiler.stack_count -= 2;
 
-    materialize_vstack(a);
     materialize_vstack(b);
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
@@ -1693,7 +1700,7 @@ static void if_statement() {
     expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
 
-    materialize_vstack(&compiler.stack[compiler.stack_count - 1]);
+    materialize_vstack(&compiler.stack[--compiler.stack_count]);
 
     write_op((op_t){.type = OP_IF});
 
@@ -1720,17 +1727,17 @@ static void if_statement() {
 }
 
 static void while_statement() {
-    consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'.");
-    expression(PREC_ASSIGNMENT);
-    consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
-
     int loop_label = compiler.loop_counter++;
     int block_label = compiler.loop_counter++;
 
     write_op((op_t){.type = OP_LOOP, .as.label_index = loop_label});
     write_op((op_t){.type = OP_BLOCK, .as.label_index = block_label});
 
-    materialize_vstack(&compiler.stack[compiler.stack_count - 1]);
+    consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'.");
+    expression(PREC_ASSIGNMENT);
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
+
+    materialize_vstack(&compiler.stack[--compiler.stack_count]);
 
     write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
     write_op((op_t){.type = OP_JMPIF, .as.label_index = block_label});
@@ -1770,7 +1777,9 @@ static void for_statement() {
         expression(PREC_ASSIGNMENT);
     }
 
-    materialize_vstack(&compiler.stack[compiler.stack_count - 1]);
+    stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
+    materialize_vstack(last_stackv);
+
     write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
     write_op((op_t){.type = OP_JMPIF, .as.label_index = block_label});
 
@@ -1959,6 +1968,7 @@ static void function(type_e return_type) {
             local->is_on_stack = false;
             local->is_absolute = false;
             local->is_param = true;
+            local->depth = compiler.scope_depth;
 
             compiler.local_count++;
         } else {
@@ -2164,7 +2174,8 @@ static void function(type_e return_type) {
                 write_type(op->value_type);
 
                 if (is_type(op->value_type, TYPE_CHAR) ||
-                    is_type(op->value_type, TYPE_I8)) {
+                    is_type(op->value_type, TYPE_I8) ||
+                    is_type(op->value_type, TYPE_BOOL)) {
                     write_string(".store8\n");
                 } else if (is_type(op->value_type, TYPE_I16)) {
                     write_string(".store16\n");
@@ -2199,7 +2210,8 @@ static void function(type_e return_type) {
                 write_string(";; Load variable from stack\n");
 
                 write_type(op->value_type);
-                if (is_type(op->value_type, TYPE_CHAR)) {
+                if (is_type(op->value_type, TYPE_CHAR) ||
+                    is_type(op->value_type, TYPE_BOOL)) {
                     write_string(".load8_u\n");
                 } else if (is_type(op->value_type, TYPE_I8)) {
                     write_string(".load8_s\n");
@@ -2224,7 +2236,8 @@ static void function(type_e return_type) {
             } else {
                 write_type(compiler.ops[i].value_type);
 
-                if (is_type(compiler.ops[i].value_type, TYPE_CHAR)) {
+                if (is_type(compiler.ops[i].value_type, TYPE_CHAR) ||
+                    is_type(compiler.ops[i].value_type, TYPE_BOOL)) {
                     write_string(".load8_u\n");
                 } else if (is_type(compiler.ops[i].value_type, TYPE_I8)) {
                     write_string(".load8_s\n");
@@ -2246,7 +2259,8 @@ static void function(type_e return_type) {
                 write_type(op->value_type);
 
                 if (is_type(op->value_type, TYPE_CHAR) ||
-                    is_type(op->value_type, TYPE_I8)) {
+                    is_type(op->value_type, TYPE_I8) ||
+                    is_type(op->value_type, TYPE_BOOL)) {
                     write_string(".store8\n");
                 } else if (is_type(op->value_type, TYPE_I16)) {
                     write_string(".store16\n");
@@ -2541,6 +2555,10 @@ static void function(type_e return_type) {
             write_string("i32.eqz\n");
             break;
         }
+        case OP_RETURN: {
+            write_string("return\n");
+            break;
+        }
         default:
             error("Unknown operation.");
             break;
@@ -2620,6 +2638,16 @@ static void struct_declaration() {
 }
 
 static void return_statement() {
+    if (compiler.scope_depth == 0) {
+        error("Return statement cannot be used outside of a function.");
+        return;
+    }
+
+    if (match(TOKEN_SEMICOLON)) {
+        write_op((op_t){.type = OP_RETURN, .value_type = TYPE_VOID});
+        return;
+    }
+
     expression(PREC_ASSIGNMENT);
     consume(TOKEN_SEMICOLON, "Expected ';' after return statement.");
 
@@ -2652,55 +2680,74 @@ static void declaration() {
     }
 }
 
+static void add_import_fn(const char *module, const char *name,
+                          type_e return_type, int param_count,
+                          type_e *param_types) {
+    local_t *local = &compiler.locals[compiler.local_count++];
+    local->name.start = name;
+    local->name.length = strlen(name);
+    local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
+    local->is_on_stack = false;
+    local->is_absolute = false;
+    local->is_param = false;
+    local->depth = 0;
+
+    fundef_t *fundef = &compiler.fundefs[compiler.fundef_count++];
+    fundef->name.start = name;
+    fundef->name.length = strlen(name);
+    fundef->return_type = return_type;
+    fundef->param_count = param_count;
+    fundef->params = (fielddef_t *)malloc(sizeof(fielddef_t) * param_count);
+
+    for (int i = 0; i < param_count; i++) {
+        fundef->params[i].name.start = NULL; // No parameter names for imports
+        fundef->params[i].name.length = 0;
+        fundef->params[i].type = param_types[i];
+    }
+
+    write_string("(import \"");
+    write_string(module);
+    write_string("\" \"");
+    write_string(name);
+    write_string("\" (func $");
+    write_string(name);
+    write_string(" ");
+
+    if (param_count > 0) {
+        write_string("(param");
+        for (int i = 0; i < param_count; i++) {
+            write_string(" ");
+            write_type(param_types[i]);
+        }
+
+        write_string(")");
+    }
+
+    if (return_type != TYPE_VOID) {
+        write_string(" (result ");
+        write_type(return_type);
+        write_string(")");
+    }
+
+    write_string("))\n");
+}
+
 static void module() {
     write_string("(module\n");
     write_string("(import \"core\" \"print\" (func $print_i32 (param i32)))\n");
     write_string("(import \"core\" \"print\" (func $print_i64 (param i64)))\n");
     write_string("(import \"core\" \"print\" (func $print_f32 (param f32)))\n");
     write_string("(import \"core\" \"print\" (func $print_f64 (param f64)))\n");
-    write_string("(import \"core\" \"putc\" (func $putc (param i32)))\n");
-    write_string("(import \"core\" \"puts\" (func $puts (param i32)))\n");
+
+    add_import_fn("core", "putc", TYPE_VOID, 1, (type_e[]){TYPE_I32});
+    add_import_fn("core", "puts", TYPE_VOID, 1, (type_e[]){TYPE_I32});
+    add_import_fn("core", "rand", TYPE_I32, 2, (type_e[]){TYPE_I32, TYPE_I32});
+    add_import_fn("core", "get_key", TYPE_BOOL, 1, (type_e[]){TYPE_I32});
+    add_import_fn("ctx", "ctx_put_pixel", TYPE_VOID, 3,
+                  (type_e[]){TYPE_I32, TYPE_I32, TYPE_I32});
+    add_import_fn("ctx", "ctx_fill", TYPE_VOID, 1, (type_e[]){TYPE_I32});
+
     write_string("(memory $0 1)\n");
-
-    // create local for putc
-    local_t *putc_local = &compiler.locals[compiler.local_count++];
-    putc_local->name.start = "putc";
-    putc_local->name.length = 4;
-    putc_local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
-    putc_local->is_on_stack = false;
-    putc_local->is_absolute = false;
-    putc_local->is_param = false;
-    putc_local->depth = 0;
-
-    fundef_t *putc_fundef = &compiler.fundefs[compiler.fundef_count++];
-    putc_fundef->name.start = "putc";
-    putc_fundef->name.length = 4;
-    putc_fundef->return_type = TYPE_VOID;
-    putc_fundef->param_count = 1;
-    putc_fundef->params = (fielddef_t *)malloc(sizeof(fielddef_t));
-    putc_fundef->params[0].name.start = "c";
-    putc_fundef->params[0].name.length = 1;
-    putc_fundef->params[0].type = TYPE_I32;
-
-    // create local for puts
-    local_t *puts_local = &compiler.locals[compiler.local_count++];
-    puts_local->name.start = "puts";
-    puts_local->name.length = 4;
-    puts_local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
-    puts_local->is_on_stack = false;
-    puts_local->is_absolute = false;
-    puts_local->is_param = false;
-    puts_local->depth = 0;
-
-    fundef_t *puts_fundef = &compiler.fundefs[compiler.fundef_count++];
-    puts_fundef->name.start = "puts";
-    puts_fundef->name.length = 4;
-    puts_fundef->return_type = TYPE_VOID;
-    puts_fundef->param_count = 1;
-    puts_fundef->params = (fielddef_t *)malloc(sizeof(fielddef_t) * 1);
-    puts_fundef->params[0].name.start = "ptr";
-    puts_fundef->params[0].name.length = 3;
-    puts_fundef->params[0].type = TYPE_I32;
 
     local_t *heap_base_local = &compiler.locals[compiler.local_count++];
     heap_base_local->name.start = "__heap_base";
@@ -2713,6 +2760,7 @@ static void module() {
     heap_base_local->frame_index = 0;
 
     int heap_base = 16384;
+    int prev_local_count = compiler.local_count;
     lexer_t lsnap = lexer_snapshot();
     parser_t psnap = parser_snapshot();
 
@@ -2726,7 +2774,7 @@ static void module() {
 
     compiler.fundef_count = 0;
     compiler.structdef_count = 0;
-    compiler.local_count = 3;
+    compiler.local_count = prev_local_count;
     compiler.const_count = 0;
     compiler.data_offset = 0;
     compiler.loop_counter = 0;
@@ -2816,6 +2864,14 @@ static void module() {
             unsigned char byte = const_value->as.c.i32 != 0 ? 1 : 0;
             snprintf(buffer, sizeof(buffer), "\\%02x", byte);
             write_string(buffer);
+        } else if (is_type(const_value->type, TYPE_STRUCT)) {
+            int structdef_index = get_type_data(const_value->type);
+            structdef_t *structdef = &compiler.structdefs[structdef_index];
+            int size = calculate_struct_size(structdef);
+
+            for (int j = 0; j < size; ++j) {
+                write_string("\\00");
+            }
         } else {
             error("Unsupported constant type for data segment.");
         }
@@ -2828,9 +2884,16 @@ static void module() {
     write_int(heap_base);
     write_string("))\n");
 
-    // write_string("(start $main)\n");
     write_string("(export \"memory\" (memory $0))\n");
-    write_string("(export \"main\" (func $main))\n");
+    for (int i = 0; i < compiler.fundef_count; ++i) {
+        fundef_t *def = &compiler.fundefs[i];
+        write_string("(export \"");
+        write_string_length(def->name.start, def->name.length);
+        write_string("\" (func $");
+        write_string_length(def->name.start, def->name.length);
+        write_string("))\n");
+    }
+
     write_string(")");
 }
 
