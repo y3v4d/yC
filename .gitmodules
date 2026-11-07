@@ -1,0 +1,4 @@
+[submodule "thirdparty/wasmtime"]
+	path = thirdparty/wasmtime
+	url = https://github.com/bytecodealliance/wasmtime
+	branch = release-50.0.0

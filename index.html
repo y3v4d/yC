@@ -36,7 +36,7 @@
         ]
 
         async function main() {
-            const wasm = await fetch("build/out.wasm");
+            const wasm = await fetch("snake.wasm");
             const buffer = await wasm.arrayBuffer();
 
             const { instance } = await WebAssembly.instantiate(buffer, {

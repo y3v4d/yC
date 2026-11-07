@@ -1,9 +1,15 @@
 [
   {
-    "label": "cmake: configure",
+    "label": "cmake: configure debug",
     "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     "use_new_terminal": false,
     "allow_concurrent_runs": false
+  },
+  {
+      "label": "cmake: configure release",
+      "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false
   },
   {
     "label": "cmake: build",

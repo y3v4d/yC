@@ -24,8 +24,8 @@ A (bit bigger) list of features that yC currently supports:
 
 - [Clang](https://releases.llvm.org/download.html) (or other C compiler)
 - [CMake](https://cmake.org/download/)
+- [Rust](https://www.rust-lang.org/tools/install) for compiling the wasmtime runtime (used to compile wat to wasm)
 - [Node.js](https://nodejs.org/en/download) for running the WebAssembly output in a Node.js environment (used by current REPL)
-- [WABT](https://github.com/webassembly/wabt) for converting WebAssembly text format to binary format (used by current REPL)
 
 ## Building
 
@@ -35,6 +35,8 @@ Build as any other C project with CMake:
 cmake -S . -B build
 cmake --build build
 ```
+
+Or if you're using Zed editor use the prepared cmake configure and build tasks.
 
 ## Running
 
@@ -46,13 +48,13 @@ To run the provided REPL, use the following command:
 
 Currently REPL requires a full fledged main function with every instruction, so it's easier to write the code in the `main.yc` file and compile it by typing 'l' and Enter in the repl input.
 
-To run the compiler on a source file, use the following command:
+To run the compiler on a source file, use the following command (where <source_file> is a path to the file ending with .yc extension):
 
 ```bash
 ./build/app <source_file>
 ```
 
-This will create a build/out.wat and build/out.wasm files on successful compilation.
+This will create a .wat and .wasm files in the same directory as source file on successful compilation.
 
 ## Running snake example
 
