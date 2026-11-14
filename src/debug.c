@@ -153,6 +153,12 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_I16:
         printf("TOKEN_I16");
         break;
+    case TOKEN_MEM:
+        printf("TOKEN_MEM");
+        break;
+    case TOKEN_ARROW:
+        printf("TOKEN_ARROW");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

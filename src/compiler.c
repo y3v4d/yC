@@ -44,40 +44,6 @@ typedef enum {
     TYPE_MAX_VALUE = INT_MAX // 32-bit integer max value
 } type_e;
 
-typedef enum {
-    OP_ADD,
-    OP_SUB,
-    OP_MUL,
-    OP_DIV,
-    OP_ADDRESS_VAR,
-    OP_LOAD,
-    OP_STORE,
-    OP_LOAD_VAR,
-    OP_STORE_VAR,
-    OP_COPY_TEMP,
-    OP_CONST,
-    OP_CONVERT,
-    OP_CALL,
-    OP_IF,
-    OP_IFR,
-    OP_ELSE,
-    OP_END,
-    OP_PRINT,
-    OP_LOOP,
-    OP_BLOCK,
-    OP_JMP,
-    OP_JMPIF,
-    OP_NEGATE,
-    OP_EQUAL,
-    OP_NEQUAL,
-    OP_GREATER,
-    OP_LESS,
-    OP_GREATER_EQUAL,
-    OP_LESS_EQUAL,
-    OP_EQZ,
-    OP_RETURN
-} optype_e;
-
 typedef union {
     int8_t i8;
     int16_t i16;
@@ -88,31 +54,12 @@ typedef union {
 } const_u;
 
 typedef struct {
-    optype_e type;
-    type_e value_type;
-
-    int offset;
-    bool should_load;
-
-    union {
-        struct {
-            type_e from;
-            type_e to;
-        } convert;
-
-        int temp_offset;
-        const_u c;
-        int var_index;
-        int label_index;
-    } as;
-} op_t;
-
-typedef struct {
     token_t name;
     type_e type;
 
     bool is_absolute;
     bool is_on_stack;
+    bool is_global;
     bool is_param;
 
     int frame_index;
@@ -177,14 +124,8 @@ typedef struct {
 } const_t;
 
 typedef struct {
-    op_t *ops;
-    int op_count;
-    int op_capcity;
-
     char *buffer;
     char *current;
-
-    int temp_max;
 
     stackv_t stack[256];
     int stack_count;
@@ -203,12 +144,14 @@ typedef struct {
 
     int data_offset;
     local_t *frame_ptr;
+    int sstack_count;
+    int sstack_atleast;
 
     int scope_depth;
     int loop_counter;
     bool no_op;
+    bool used_fp;
 } compiler_t;
-// a && b == c
 
 typedef enum {
     PREC_NONE,
@@ -238,10 +181,6 @@ static parserule_t *get_rule(tokentype_e type);
 static void declaration();
 
 static void compiler_init() {
-    compiler.ops = NULL;
-    compiler.op_count = 0;
-    compiler.op_capcity = 0;
-
     compiler.frame_ptr = compiler.locals;
 
     compiler.buffer = malloc(1024 * 1024);
@@ -250,20 +189,18 @@ static void compiler_init() {
     compiler.stack_count = 0;
     compiler.scope_depth = 0;
     compiler.no_op = false;
+    compiler.used_fp = false;
 
-    compiler.temp_max = 0;
     compiler.const_count = 0;
     compiler.data_offset = 0;
     compiler.loop_counter = 0;
+    compiler.sstack_count = 0;
 
     compiler.structdef_count = 0;
     compiler.fundef_count = 0;
 }
 
 static void compiler_free() {
-    if (compiler.ops != NULL)
-        free(compiler.ops);
-
     if (compiler.buffer != NULL)
         free(compiler.buffer);
 }
@@ -284,7 +221,7 @@ static void advance() {
         parser.had_error = true;
     }
 
-#ifdef DEBUG_OUTPUT
+#ifdef DEBUG_OUTPUT_TOKEN
     print_token(parser.previous);
 #endif
 }
@@ -463,21 +400,6 @@ static type_e match_type() {
     return matched_primitive ? token_to_type(current.type, is_pointer_type)
                              : create_type(TYPE_STRUCT, is_pointer_type,
                                            structdef - compiler.structdefs);
-}
-
-static void write_op(op_t op) {
-    if (compiler.no_op) {
-        return;
-    }
-
-    if (compiler.op_count >= compiler.op_capcity) {
-        compiler.op_capcity =
-            compiler.op_capcity < 8 ? 8 : compiler.op_capcity * 2;
-        compiler.ops =
-            realloc(compiler.ops, sizeof(op_t) * compiler.op_capcity);
-    }
-
-    compiler.ops[compiler.op_count++] = op;
 }
 
 static void print_const(type_e type, const_u c) {
@@ -694,111 +616,6 @@ static const_u cast_const(const_u self, type_e from, type_e to) {
     return result;
 }
 
-static void print_op(op_t op) {
-    if (compiler.no_op) {
-        return;
-    }
-
-    switch (op.type) {
-    case OP_ADD:
-        printf("OP_ADD\n");
-        break;
-    case OP_SUB:
-        printf("OP_SUB\n");
-        break;
-    case OP_MUL:
-        printf("OP_MUL\n");
-        break;
-    case OP_DIV:
-        printf("OP_DIV\n");
-        break;
-    case OP_ADDRESS_VAR:
-        printf("OP_ADDRESS_VAR %d\n", op.as.var_index);
-        break;
-    case OP_CONST:
-        printf("OP_CONST ");
-        print_const(op.value_type, op.as.c);
-        printf("\n");
-        break;
-    case OP_CALL:
-        printf("OP_CALL %d\n", op.as.var_index);
-        break;
-    case OP_IF:
-        printf("OP_IF\n");
-        break;
-    case OP_ELSE:
-        printf("OP_ELSE\n");
-        break;
-    case OP_END:
-        printf("OP_END\n");
-        break;
-    case OP_PRINT:
-        printf("OP_PRINT\n");
-        break;
-    case OP_LOAD:
-        printf("OP_LOAD\n");
-        break;
-    case OP_STORE:
-        printf("OP_STORE\n");
-        break;
-    case OP_CONVERT:
-        printf("OP_CONVERT from %d to %d\n", op.as.convert.from,
-               op.as.convert.to);
-        break;
-    case OP_COPY_TEMP:
-        printf("OP_COPY_TEMP offset %d\n", op.as.temp_offset);
-        break;
-    case OP_LOAD_VAR:
-        printf("OP_LOAD_VAR\n");
-        break;
-    case OP_STORE_VAR:
-        printf("OP_STORE_VAR\n");
-        break;
-    case OP_LOOP:
-        printf("OP_LOOP %d\n", op.as.label_index);
-        break;
-    case OP_BLOCK:
-        printf("OP_BLOCK %d\n", op.as.label_index);
-        break;
-    case OP_JMP:
-        printf("OP_JMP %d\n", op.as.label_index);
-        break;
-    case OP_JMPIF:
-        printf("OP_JMPIF %d\n", op.as.label_index);
-        break;
-    case OP_NEGATE:
-        printf("OP_NEGATE\n");
-        break;
-    case OP_EQUAL:
-        printf("OP_EQUAL\n");
-        break;
-    case OP_NEQUAL:
-        printf("OP_NEQUAL\n");
-        break;
-    case OP_GREATER:
-        printf("OP_GREATER\n");
-        break;
-    case OP_LESS:
-        printf("OP_LESS\n");
-        break;
-    case OP_GREATER_EQUAL:
-        printf("OP_GREATER_EQUAL\n");
-        break;
-    case OP_LESS_EQUAL:
-        printf("OP_LESS_EQUAL\n");
-        break;
-    case OP_EQZ:
-        printf("OP_EQZ\n");
-        break;
-    case OP_IFR:
-        printf("OP_IFR\n");
-        break;
-    default:
-        printf("UNKNOWN_OP\n");
-        break;
-    }
-}
-
 static void write_string(const char *data) {
     char c;
 
@@ -912,61 +729,441 @@ static void write_i32_const(int value) {
     write_string("\n");
 }
 
+static void iwrite_const(type_e type, const_u c) {
+    write_type(type);
+    write_string(".const ");
+    write_const(c, type);
+    write_string("\n");
+}
+
+static void iwrite_load(type_e type) {
+    if (is_struct(type)) {
+        // structs are represented as addresses, since address is
+        // expected to be on the stack at this point, we don't need to
+        // do anything here
+        return;
+    }
+
+    write_type(type);
+    if (is_type(type, TYPE_CHAR) || is_type(type, TYPE_BOOL)) {
+        write_string(".load8_u\n");
+    } else if (is_type(type, TYPE_I8)) {
+        write_string(".load8_s\n");
+    } else if (is_type(type, TYPE_I16)) {
+        write_string(".load16_s\n");
+    } else {
+        write_string(".load\n");
+    }
+}
+
+static void iwrite_store(type_e type) {
+    if (is_struct(type)) {
+        write_i32_const(
+            calculate_struct_size(&compiler.structdefs[get_type_data(type)]));
+        write_string("memory.copy\n");
+    } else {
+        write_type(type);
+
+        if (is_type(type, TYPE_CHAR) || is_type(type, TYPE_I8) ||
+            is_type(type, TYPE_BOOL)) {
+            write_string(".store8\n");
+        } else if (is_type(type, TYPE_I16)) {
+            write_string(".store16\n");
+        } else {
+            write_string(".store\n");
+        }
+    }
+}
+
+static void iwrite_add(type_e type) {
+    write_type(type);
+    write_string(".add\n");
+}
+
+static void iwrite_sub(type_e type) {
+    write_type(type);
+    write_string(".sub\n");
+}
+
+static void iwrite_mul(type_e type) {
+    write_type(type);
+    write_string(".mul\n");
+}
+
+static void iwrite_div(type_e type) {
+    write_type(type);
+
+    if (is_type(type, TYPE_I32) || is_type(type, TYPE_I64) ||
+        is_type(type, TYPE_I8) || is_type(type, TYPE_I16)) {
+        write_string(".div_s\n");
+    } else if (is_type(type, TYPE_F32) || is_type(type, TYPE_F64)) {
+        write_string(".div\n");
+    } else {
+        error("Unsupported type for division.");
+    }
+}
+
+static void iwrite_negate() { write_string("i32.eqz\n"); }
+
+static void iwrite_call(token_t name) {
+    write_string("call $");
+    write_token(name);
+    write_string("\n");
+}
+
+static void iwrite_if() { write_string("(if\n(then\n"); }
+
+static void iwrite_ifr(type_e type) {
+    write_string("(if (result ");
+    write_type(type);
+    write_string(")\n(then\n");
+}
+
+static void iwrite_else() { write_string("(else\n"); }
+
+static void iwrite_end() { write_string(")\n"); }
+
+static void iwrite_loop(int index) {
+    write_string("(loop $label");
+    write_int(index);
+    write_string("\n");
+}
+
+static void iwrite_block(int index) {
+    write_string("(block $label");
+    write_int(index);
+    write_string("\n");
+}
+
+static void iwrite_jmp(int index) {
+    write_string("br $label");
+    write_int(index);
+    write_string("\n");
+}
+
+static void iwrite_jmpif(int index) {
+    write_string("br_if $label");
+    write_int(index);
+    write_string("\n");
+}
+
+static void iwrite_equal() { write_string("i32.eq\n"); }
+
+static void iwrite_nequal() { write_string("i32.ne\n"); }
+
+static void iwrite_greater() { write_string("i32.gt_s\n"); }
+
+static void iwrite_less() { write_string("i32.lt_s\n"); }
+
+static void iwrite_greater_equal() { write_string("i32.ge_s\n"); }
+
+static void iwrite_less_equal() { write_string("i32.le_s\n"); }
+
+static void iwrite_eqz() { write_string("i32.eqz\n"); }
+
+static void iwrite_return() { write_string("return\n"); }
+
+static bool write_convert(type_e from, type_e to) {
+    if (is_pointer(from) && is_pointer(to)) {
+        // no conversion needed
+    } else if (is_pointer(from)) {
+        if (is_type(to, TYPE_I32)) {
+            // no conversion needed
+        } else if (is_type(to, TYPE_I64)) {
+            write_string("i64.extend_i32_s\n");
+        } else if (is_type(to, TYPE_I8)) {
+            write_string("i32.extend8_s\n");
+        } else if (is_type(to, TYPE_I16)) {
+            write_string("i32.extend16_s\n");
+        } else if (is_type(to, TYPE_F32)) {
+            error("Cannot convert pointer to f32.");
+        } else if (is_type(to, TYPE_F64)) {
+            error("Cannot convert pointer to f64.");
+        } else if (is_type(to, TYPE_CHAR)) {
+            write_string("i32.extend8_s\n");
+        } else if (is_type(to, TYPE_BOOL)) {
+            write_string("i32.const 0\n");
+            write_string("i32.ne\n");
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_pointer(to)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
+            is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
+            is_type(from, TYPE_CHAR)) {
+            // no conversion needed
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("i32.wrap_i64\n");
+        } else if (is_type(from, TYPE_F32)) {
+            error("Cannot convert f32 to pointer.");
+            return false;
+        } else if (is_type(from, TYPE_F64)) {
+            error("Cannot convert f64 to pointer.");
+            return false;
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_I8)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I16)) {
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("i32.wrap_i64\n");
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("i32.trunc_f32_s\n");
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("i32.trunc_f64_s\n");
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_CHAR) || is_type(from, TYPE_BOOL) ||
+                   is_type(from, TYPE_I8)) {
+            // no conversion needed
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_I16)) {
+        if (is_type(from, TYPE_I32)) {
+            write_string("i32.extend16_s\n");
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("i32.wrap_i64\n");
+            write_string("i32.extend16_s\n");
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("i32.trunc_f32_s\n");
+            write_string("i32.extend16_s\n");
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("i32.trunc_f64_s\n");
+            write_string("i32.extend16_s\n");
+        } else if (is_type(from, TYPE_CHAR) || is_type(from, TYPE_BOOL) ||
+                   is_type(from, TYPE_I8) || is_type(from, TYPE_I16)) {
+            // no conversion needed
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_I32)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
+            is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
+            is_type(from, TYPE_CHAR)) {
+            // no conversion needed
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("i32.wrap_i64\n");
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("i32.trunc_f32_s\n");
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("i32.trunc_f64_s\n");
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_I64)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
+            is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
+            is_type(from, TYPE_CHAR)) {
+            write_string("i64.extend_i32_s\n");
+        } else if (is_type(from, TYPE_I64)) {
+            // no conversion needed
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("i64.trunc_f32_s\n");
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("i64.trunc_f64_s\n");
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_F32)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
+            is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
+            is_type(from, TYPE_CHAR)) {
+            write_string("f32.convert_i32_s\n");
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("f32.convert_i64_s\n");
+        } else if (is_type(from, TYPE_F32)) {
+            // no conversion needed
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("f32.demote_f64\n");
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_F64)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
+            is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
+            is_type(from, TYPE_CHAR)) {
+            write_string("f64.convert_i32_s\n");
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("f64.convert_i64_s\n");
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("f64.promote_f32\n");
+        } else if (is_type(from, TYPE_F64)) {
+            // no conversion needed
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_BOOL)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
+            is_type(from, TYPE_I16) || is_type(from, TYPE_CHAR)) {
+            write_string("i32.const 0\n");
+            write_string("i32.ne\n");
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("i64.const 0\n");
+            write_string("i64.ne\n");
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("f32.const 0.0\n");
+            write_string("f32.ne\n");
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("f64.const 0.0\n");
+            write_string("f64.ne\n");
+        } else if (is_type(from, TYPE_BOOL)) {
+            // no conversion needed
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else if (is_type(to, TYPE_CHAR)) {
+        if (is_type(from, TYPE_I32) || is_type(from, TYPE_I16)) {
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_I64)) {
+            write_string("i32.wrap_i64\n");
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_F32)) {
+            write_string("i32.trunc_f32_s\n");
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_F64)) {
+            write_string("i32.trunc_f64_s\n");
+            write_string("i32.extend8_s\n");
+        } else if (is_type(from, TYPE_CHAR) || is_type(from, TYPE_BOOL) ||
+                   is_type(from, TYPE_I8)) {
+            // no conversion needed
+        } else {
+            error("Unsupported type conversion.");
+            return false;
+        }
+    } else {
+        error("Unsupported type conversion.");
+        return false;
+    }
+
+    return true;
+}
+
+static void write_print(type_e type) {
+    if (is_pointer(type)) {
+        write_string("call $print_i32\n");
+    } else if (is_type(type, TYPE_I32) || is_type(type, TYPE_I8) ||
+               is_type(type, TYPE_I16) || is_type(type, TYPE_BOOL) ||
+               is_type(type, TYPE_CHAR)) {
+        write_string("call $print_i32\n");
+    } else if (is_type(type, TYPE_I64)) {
+        write_string("call $print_i64\n");
+    } else if (is_type(type, TYPE_F32)) {
+        write_string("call $print_f32\n");
+    } else if (is_type(type, TYPE_F64)) {
+        write_string("call $print_f64\n");
+    } else {
+        error("Unsupported type for print.");
+    }
+}
+
+static void write_address_local(local_t *local, int offset) {
+    if (local->is_global) { // for now, only wasm global is __heap_base which
+                            // value is an address so let's just get it
+        write_string("global.get $");
+        write_token(local->name);
+        write_string("\n");
+    } else if (local->is_absolute) {
+        write_i32_const(local->frame_index);
+    } else if (local->is_on_stack) {
+        write_string("local.get $fp\n");
+        offset += local->frame_index;
+        compiler.used_fp = true;
+    } else if (is_struct(local->type)) {
+        write_string("local.get $");
+        write_int(local - compiler.frame_ptr);
+        write_string("\n");
+    } else {
+        return;
+    }
+
+    if (offset > 0) {
+        write_i32_const(offset);
+        iwrite_add(TYPE_I32);
+    }
+}
+
+static void write_load_local(local_t *local, type_e type) {
+    bool is_local_struct =
+        is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
+    bool is_op_struct = is_type(type, TYPE_STRUCT) && !is_pointer(type);
+
+    if (is_op_struct) {
+        return;
+    }
+
+    if (is_local_struct || local->is_on_stack || local->is_global) {
+        iwrite_load(type);
+    } else {
+        write_string("local.get $");
+        write_int(local - compiler.frame_ptr);
+        write_string("\n");
+    }
+}
+
+static void write_store_local(local_t *local, type_e type) {
+    bool is_local_struct =
+        is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
+    bool is_op_struct = is_type(type, TYPE_STRUCT) && !is_pointer(type);
+
+    if (!local->is_on_stack && !is_local_struct && !is_op_struct) {
+        write_string("local.set $");
+        write_int(local - compiler.frame_ptr);
+        write_string("\n");
+    } else {
+        iwrite_store(type);
+    }
+}
+
 // materialize vstack value on the wasm stack
 static void materialize_vstack(stackv_t *stackv) {
     if (isv_lvalue(stackv->type)) {
         if (isv_local(stackv->type)) {
-            write_op(
-                (op_t){.type = OP_ADDRESS_VAR,
-                       .value_type = stackv->ctype,
-                       .offset = stackv->offset,
-                       .as.var_index = stackv->as.local - compiler.locals});
-
-            write_op(
-                (op_t){.type = OP_LOAD_VAR,
-                       .value_type = stackv->ctype,
-                       .as.var_index = stackv->as.local - compiler.locals});
+            write_address_local(stackv->as.local, stackv->offset);
+            write_load_local(stackv->as.local, stackv->ctype);
 
             stackv->type &= ~VTYPE_STORAGE;
             stackv->type |= VTYPE_STACK;
+        } else if (isv_const(stackv->type)) {
+            iwrite_const(stackv->ctype, stackv->as.c);
+            iwrite_load(stackv->ctype);
         } else if (isv_stack(stackv->type)) {
             if (stackv->offset > 0) {
-                write_op((op_t){.type = OP_CONST,
-                                .value_type = TYPE_I32,
-                                .as.c.i32 = stackv->offset});
-
-                write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
+                iwrite_const(TYPE_I32, (const_u){.i32 = stackv->offset});
+                iwrite_add(TYPE_I32);
             }
 
             // for struct types the address it the value, we just leave the
             // address on the stack
             if (!is_struct(stackv->ctype)) {
-                write_op((op_t){.type = OP_LOAD, .value_type = stackv->ctype});
+                iwrite_load(stackv->ctype);
             }
         }
 
         stackv->type &= ~VTYPE_LVALUE;
     } else {
         if (isv_const(stackv->type)) {
-            write_op((op_t){.type = OP_CONST,
-                            .value_type = stackv->ctype,
-                            .as.c = stackv->as.c});
+            iwrite_const(stackv->ctype, stackv->as.c);
 
             stackv->type &= ~VTYPE_STORAGE;
             stackv->type |= VTYPE_STACK;
         } else if (isv_local(stackv->type)) {
-            write_op(
-                (op_t){.type = OP_ADDRESS_VAR,
-                       .value_type = stackv->ctype,
-                       .offset = stackv->offset,
-                       .as.var_index = stackv->as.local - compiler.locals});
+            write_address_local(stackv->as.local, stackv->offset);
         } else if (isv_stack(stackv->type)) {
             if (stackv->offset > 0) {
-                write_op((op_t){.type = OP_CONST,
-                                .value_type = TYPE_I32,
-                                .as.c.i32 = stackv->offset});
-
-                write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
+                iwrite_const(TYPE_I32, (const_u){.i32 = stackv->offset});
+                iwrite_add(TYPE_I32);
             }
         }
     }
@@ -975,11 +1172,9 @@ static void materialize_vstack(stackv_t *stackv) {
 // store vstack value
 static void store_vstack(stackv_t *stackv) {
     if (isv_stack(stackv->type)) {
-        write_op((op_t){.type = OP_STORE, .value_type = stackv->ctype});
+        iwrite_store(stackv->ctype);
     } else {
-        write_op((op_t){.type = OP_STORE_VAR,
-                        .value_type = stackv->ctype,
-                        .as.var_index = stackv->as.local - compiler.locals});
+        write_store_local(stackv->as.local, stackv->ctype);
     }
 }
 
@@ -1107,10 +1302,7 @@ static void binary() {
         if (isv_const(b->type)) {
             b->as.c = cast_const(b->as.c, b->ctype, a->ctype);
         } else {
-            write_op((op_t){.type = OP_CONVERT,
-                            .value_type = b->ctype,
-                            .as.convert.from = b->ctype,
-                            .as.convert.to = a->ctype});
+            write_convert(b->ctype, a->ctype);
         }
     }
 
@@ -1123,16 +1315,16 @@ static void binary() {
 
     switch (op_type) {
     case TOKEN_PLUS:
-        write_op((op_t){.type = OP_ADD, .value_type = target_type});
+        iwrite_add(target_type);
         break;
     case TOKEN_MINUS:
-        write_op((op_t){.type = OP_SUB, .value_type = target_type});
+        iwrite_sub(target_type);
         break;
     case TOKEN_STAR:
-        write_op((op_t){.type = OP_MUL, .value_type = target_type});
+        iwrite_mul(target_type);
         break;
     case TOKEN_SLASH:
-        write_op((op_t){.type = OP_DIV, .value_type = target_type});
+        iwrite_div(target_type);
         break;
     default:
         error("Expected a binary operator.");
@@ -1164,26 +1356,28 @@ static void unary() {
             return;
         }
 
-        op_t negate_op = {.type = OP_CONST, .value_type = last_stackv.ctype};
+        const_u c = {0};
         if (is_type(last_stackv.ctype, TYPE_I32)) {
-            negate_op.as.c.i32 = -1;
+            c.i32 = -1;
         } else if (is_type(last_stackv.ctype, TYPE_I64)) {
-            negate_op.as.c.i64 = -1;
+            c.i64 = -1;
         } else if (is_type(last_stackv.ctype, TYPE_I8)) {
-            negate_op.as.c.i8 = -1;
+            c.i8 = -1;
         } else if (is_type(last_stackv.ctype, TYPE_I16)) {
-            negate_op.as.c.i16 = -1.0f;
+            c.i16 = -1.0f;
         } else if (is_type(last_stackv.ctype, TYPE_F32)) {
-            negate_op.as.c.f32 = -1.0f;
+            c.f32 = -1.0f;
         } else if (is_type(last_stackv.ctype, TYPE_F64)) {
-            negate_op.as.c.f64 = -1.0;
+            c.f64 = -1.0;
         } else {
             error("Unsupported type for unary '-' operator.");
             return;
         }
 
         materialize_vstack(&last_stackv);
-        write_op((op_t){.type = OP_MUL, .value_type = last_stackv.ctype});
+
+        iwrite_const(last_stackv.ctype, c);
+        iwrite_mul(last_stackv.ctype);
         break;
     case TOKEN_BANG:
         if (!is_type(last_stackv.ctype, TYPE_BOOL)) {
@@ -1191,17 +1385,14 @@ static void unary() {
                 last_stackv.as.c =
                     cast_const(last_stackv.as.c, last_stackv.ctype, TYPE_BOOL);
             } else {
-                write_op((op_t){.type = OP_CONVERT,
-                                .value_type = last_stackv.ctype,
-                                .as.convert.from = last_stackv.ctype,
-                                .as.convert.to = TYPE_BOOL});
+                write_convert(last_stackv.ctype, TYPE_BOOL);
             }
         }
 
         materialize_vstack(&last_stackv);
         result->ctype = TYPE_BOOL;
 
-        write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
+        iwrite_negate();
         break;
     default:
         error("Expected a unary operator.");
@@ -1222,10 +1413,7 @@ static void group() {
                 cast_const(last_stackv->as.c, last_stackv->ctype, type);
         } else {
             materialize_vstack(last_stackv);
-            write_op((op_t){.type = OP_CONVERT,
-                            .value_type = last_stackv->ctype,
-                            .as.convert.from = last_stackv->ctype,
-                            .as.convert.to = type});
+            write_convert(last_stackv->ctype, type);
         }
 
         last_stackv->ctype = type;
@@ -1289,6 +1477,23 @@ static void dot() {
     last_stackv->offset += byte_offset;
 }
 
+static void arrow() {
+    stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
+    if (!is_pointer(last_stackv->ctype)) {
+        error("Cannot dereference a non-pointer type.");
+        return;
+    }
+
+    if (isv_lvalue(last_stackv->type)) {
+        materialize_vstack(last_stackv);
+    }
+
+    last_stackv->ctype &= ~TYPE_POINTER_FLAG;
+    last_stackv->type |= VTYPE_LVALUE;
+
+    dot();
+}
+
 static void call() {
     stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
     if (!isv_local(last_stackv->type)) {
@@ -1311,8 +1516,32 @@ static void call() {
         return;
     }
 
-    int temp_offset = 0;
+    fundef_t *fundef = &compiler.fundefs[get_type_data(last_stackv->ctype)];
+
+    int current_param = 0;
+    int additional_stack = 0;
     while (!check(TOKEN_RIGHT_PAREN) && parser.current.type != TOKEN_EOF) {
+        if (current_param >= fundef->param_count) {
+            error("Too many arguments in function call.");
+            return;
+        }
+
+        fielddef_t *fielddef = &fundef->params[current_param];
+        int size = get_type_size(fielddef->type);
+        int offset = 0;
+
+        if (is_type(fielddef->type, TYPE_STRUCT) &&
+            !is_pointer(fielddef->type)) { // prepare for copy
+            offset = compiler.sstack_count + additional_stack;
+
+            write_string("local.get $fp\n");
+            compiler.used_fp = true;
+            if (offset > 0) {
+                write_i32_const(offset);
+                iwrite_add(TYPE_I32);
+            }
+        }
+
         expression(PREC_ASSIGNMENT);
         if (!check(TOKEN_RIGHT_PAREN)) {
             consume(TOKEN_COMMA, "Expected ',' between arguments.");
@@ -1321,28 +1550,44 @@ static void call() {
         stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
         materialize_vstack(last_stackv);
 
+        if (last_stackv->ctype != fielddef->type) {
+            if (!write_convert(last_stackv->ctype, fielddef->type)) {
+                return;
+            }
+
+            last_stackv->ctype = fielddef->type;
+        }
+
         if (is_type(last_stackv->ctype, TYPE_STRUCT) &&
             !is_pointer(last_stackv->ctype)) {
-            int structdef_index = get_type_data(last_stackv->ctype);
-            structdef_t *structdef = &compiler.structdefs[structdef_index];
-            int size = calculate_struct_size(structdef);
+            write_i32_const(size);
+            write_string("memory.copy\n");
 
-            write_op((op_t){.type = OP_COPY_TEMP,
-                            .value_type = last_stackv->ctype,
-                            .as.temp_offset = temp_offset});
+            write_string("local.get $fp\n");
+            if (offset > 0) {
+                write_i32_const(offset);
+                iwrite_add(TYPE_I32);
+            }
 
-            temp_offset += size;
+            additional_stack += size;
+        }
+
+        current_param++;
+    }
+
+    if (current_param < fundef->param_count) {
+        error("Too few arguments in function call.");
+        return;
+    }
+
+    if (additional_stack > 0) {
+        int new_atleast = compiler.sstack_count + additional_stack;
+        if (new_atleast > compiler.sstack_atleast) {
+            compiler.sstack_atleast = new_atleast;
         }
     }
 
-    if (temp_offset > compiler.temp_max) {
-        compiler.temp_max = temp_offset;
-    }
-
-    write_op((op_t){.type = OP_CALL,
-                    .value_type = last_stackv->ctype,
-                    .as.var_index = last_stackv->as.local - compiler.locals});
-
+    iwrite_call(last_stackv->as.local->name);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function call.");
 }
 
@@ -1394,12 +1639,15 @@ static void address() {
         return;
     }
 
-    local_t *local = last_stackv->as.local;
-    bool is_struct =
-        is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
-
-    if (!is_struct) {
-        local->is_on_stack = true;
+    if (isv_local(last_stackv->type)) {
+        local_t *local = last_stackv->as.local;
+        if (!local->is_on_stack && !is_pointer(local->type)) {
+            error(
+                "Cannot take the address of a local variable that is not on "
+                "the "
+                "stack. Try to add 'mem' keyword to the variable declaration.");
+            return;
+        }
     }
 
     last_stackv->type &= ~VTYPE_LVALUE;
@@ -1449,10 +1697,7 @@ static void assignment() {
     materialize_vstack(vvalue);
 
     if (vvalue->ctype != vtarget->ctype) {
-        write_op((op_t){.type = OP_CONVERT,
-                        .value_type = vtarget->ctype,
-                        .as.convert.from = vvalue->ctype,
-                        .as.convert.to = vtarget->ctype});
+        write_convert(vvalue->ctype, vtarget->ctype);
     }
 
     store_vstack(vtarget);
@@ -1506,12 +1751,9 @@ static void bracket() {
     }
 
     materialize_vstack(index_stackv);
-    write_op(
-        (op_t){.type = OP_CONST,
-               .value_type = TYPE_I32,
-               .as.c.i32 = get_type_size(element_type & ~TYPE_POINTER_FLAG)});
-    write_op((op_t){.type = OP_MUL, .value_type = TYPE_I32});
-    write_op((op_t){.type = OP_ADD, .value_type = TYPE_I32});
+    write_i32_const(get_type_size(element_type & ~TYPE_POINTER_FLAG));
+    iwrite_mul(TYPE_I32);
+    iwrite_add(TYPE_I32);
 
     index_stackv->ctype = element_type & ~TYPE_POINTER_FLAG;
     index_stackv->type |= VTYPE_LVALUE;
@@ -1563,22 +1805,22 @@ static void equality() {
 
     switch (op_type) {
     case TOKEN_EQUAL_EQUAL:
-        write_op((op_t){.type = OP_EQUAL, .value_type = TYPE_BOOL});
+        iwrite_equal();
         break;
     case TOKEN_BANG_EQUAL:
-        write_op((op_t){.type = OP_NEQUAL, .value_type = TYPE_BOOL});
+        iwrite_nequal();
         break;
     case TOKEN_GREATER:
-        write_op((op_t){.type = OP_GREATER, .value_type = TYPE_BOOL});
+        iwrite_greater();
         break;
     case TOKEN_LESS:
-        write_op((op_t){.type = OP_LESS, .value_type = TYPE_BOOL});
+        iwrite_less();
         break;
     case TOKEN_GREATER_EQUAL:
-        write_op((op_t){.type = OP_GREATER_EQUAL, .value_type = TYPE_BOOL});
+        iwrite_greater_equal();
         break;
     case TOKEN_LESS_EQUAL:
-        write_op((op_t){.type = OP_LESS_EQUAL, .value_type = TYPE_BOOL});
+        iwrite_less_equal();
         break;
     default:
         error("Expected an equality operator.");
@@ -1590,18 +1832,18 @@ static void and() {
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
     materialize_vstack(a);
 
-    write_op((op_t){.type = OP_IFR, .value_type = TYPE_BOOL});
+    iwrite_ifr(TYPE_BOOL);
     expression(PREC_AND + 1);
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
     materialize_vstack(b);
-    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+    iwrite_end();
 
-    write_op((op_t){.type = OP_ELSE, .value_type = TYPE_BOOL});
-    write_op((op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.c.i32 = 0});
-    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+    iwrite_else();
+    iwrite_const(TYPE_BOOL, (const_u){.i32 = 0});
+    iwrite_end();
 
-    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+    iwrite_end();
 
     compiler.stack_count -= 2;
 
@@ -1615,19 +1857,19 @@ static void or() {
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
     materialize_vstack(a);
 
-    write_op((op_t){.type = OP_IFR, .value_type = TYPE_BOOL});
-    write_op((op_t){.type = OP_CONST, .value_type = TYPE_BOOL, .as.c.i32 = 1});
-    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+    iwrite_ifr(TYPE_BOOL);
+    iwrite_const(TYPE_BOOL, (const_u){.i32 = 1});
+    iwrite_end();
 
-    write_op((op_t){.type = OP_ELSE, .value_type = TYPE_BOOL});
+    iwrite_else();
 
     expression(PREC_AND + 1);
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
     materialize_vstack(b);
 
-    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
-    write_op((op_t){.type = OP_END, .value_type = TYPE_BOOL});
+    iwrite_end();
+    iwrite_end();
 
     compiler.stack_count -= 2;
 
@@ -1666,6 +1908,7 @@ parserule_t rules[] = {
     [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
     [TOKEN_STRUCT] = {NULL, NULL, PREC_NONE},
     [TOKEN_DOT] = {NULL, dot, PREC_ACCESS},
+    [TOKEN_ARROW] = {NULL, arrow, PREC_ACCESS},
     [TOKEN_CHAR_LITERAL] = {character, NULL, PREC_NONE},
     [TOKEN_STRING_LITERAL] = {string, NULL, PREC_NONE},
     [TOKEN_VOID] = {NULL, NULL, PREC_NONE},
@@ -1692,7 +1935,7 @@ static void print_statement() {
     compiler.stack_count--; // Pop the last stack value
 
     materialize_vstack(last_stackv);
-    write_op((op_t){.type = OP_PRINT, .value_type = last_stackv->ctype});
+    write_print(last_stackv->ctype);
 }
 
 static void if_statement() {
@@ -1702,7 +1945,7 @@ static void if_statement() {
 
     materialize_vstack(&compiler.stack[--compiler.stack_count]);
 
-    write_op((op_t){.type = OP_IF});
+    iwrite_if();
 
     consume(TOKEN_LEFT_BRACE, "Expected '{' after 'if' condition.");
 
@@ -1710,28 +1953,28 @@ static void if_statement() {
     block();
     end_scope();
 
-    write_op((op_t){.type = OP_END});
+    iwrite_end();
 
     if (match(TOKEN_ELSE)) {
         consume(TOKEN_LEFT_BRACE, "Expected '{' after 'else'.");
-        write_op((op_t){.type = OP_ELSE});
+        iwrite_else();
 
         begin_scope();
         block();
         end_scope();
 
-        write_op((op_t){.type = OP_END});
+        iwrite_end();
     }
 
-    write_op((op_t){.type = OP_END});
+    iwrite_end();
 }
 
 static void while_statement() {
     int loop_label = compiler.loop_counter++;
     int block_label = compiler.loop_counter++;
 
-    write_op((op_t){.type = OP_LOOP, .as.label_index = loop_label});
-    write_op((op_t){.type = OP_BLOCK, .as.label_index = block_label});
+    iwrite_loop(loop_label);
+    iwrite_block(block_label);
 
     consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'.");
     expression(PREC_ASSIGNMENT);
@@ -1739,8 +1982,8 @@ static void while_statement() {
 
     materialize_vstack(&compiler.stack[--compiler.stack_count]);
 
-    write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
-    write_op((op_t){.type = OP_JMPIF, .as.label_index = block_label});
+    iwrite_negate();
+    iwrite_jmpif(block_label);
 
     consume(TOKEN_LEFT_BRACE, "Expected '{' after 'while' condition.");
 
@@ -1748,14 +1991,10 @@ static void while_statement() {
     block();
     end_scope();
 
-    write_op((op_t){.type = OP_JMP, .as.label_index = loop_label});
-    write_op((op_t){.type = OP_END});
-    write_op((op_t){.type = OP_END});
+    iwrite_jmp(loop_label);
+    iwrite_end();
+    iwrite_end();
 }
-
-static parser_t parser_snapshot() { return parser; }
-
-static void parser_restore(parser_t *snapshot) { parser = *snapshot; }
 
 static void for_statement() {
     begin_scope();
@@ -1770,8 +2009,8 @@ static void for_statement() {
     int loop_label = compiler.loop_counter++;
     int block_label = compiler.loop_counter++;
 
-    write_op((op_t){.type = OP_LOOP, .as.label_index = loop_label});
-    write_op((op_t){.type = OP_BLOCK, .as.label_index = block_label});
+    iwrite_loop(loop_label);
+    iwrite_block(block_label);
 
     if (!check(TOKEN_SEMICOLON)) {
         expression(PREC_ASSIGNMENT);
@@ -1780,20 +2019,27 @@ static void for_statement() {
     stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
     materialize_vstack(last_stackv);
 
-    write_op((op_t){.type = OP_NEGATE, .value_type = TYPE_BOOL});
-    write_op((op_t){.type = OP_JMPIF, .as.label_index = block_label});
+    iwrite_negate();
+    iwrite_jmpif(block_label);
 
-    bool has_inc = false;
     consume(TOKEN_SEMICOLON, "Expected ';' after loop condition.");
 
-    lexer_t snapshot = lexer_snapshot();
-    parser_t psnapshot = parser_snapshot();
+    char *inc_code = NULL;
+    int inc_code_length = 0;
+
     if (!check(TOKEN_RIGHT_PAREN)) {
-        has_inc = true;
-        // expression(PREC_ASSIGNMENT);
-        while (!check(TOKEN_RIGHT_PAREN) && !check(TOKEN_EOF)) {
-            advance();
+        char *checkpoint = compiler.current;
+        expression(PREC_ASSIGNMENT);
+
+        inc_code_length = compiler.current - checkpoint;
+        inc_code = (char *)malloc(inc_code_length);
+        if (inc_code == NULL) {
+            error("Memory allocation failed for increment code.");
+            return;
         }
+
+        memcpy(inc_code, checkpoint, inc_code_length);
+        compiler.current = checkpoint;
     }
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'for' clauses.");
 
@@ -1802,39 +2048,42 @@ static void for_statement() {
     block();
     end_scope();
 
-    if (has_inc) {
-        lexer_t now = lexer_snapshot();
-        parser_t psnapshot_now = parser_snapshot();
+    if (inc_code_length > 0) {
+        memcpy(compiler.current, inc_code, inc_code_length);
+        compiler.current += inc_code_length;
 
-        lexer_restore(&snapshot);
-        parser_restore(&psnapshot);
-        expression(PREC_ASSIGNMENT);
-        lexer_restore(&now);
-        parser_restore(&psnapshot_now);
+        free(inc_code);
     }
 
-    write_op((op_t){.type = OP_JMP, .as.label_index = loop_label});
-    write_op((op_t){.type = OP_END});
-    write_op((op_t){.type = OP_END});
+    iwrite_jmp(loop_label);
+    iwrite_end();
+    iwrite_end();
 
     end_scope();
 }
 
-static void named_var(type_e type) {
+static void named_var(type_e type, bool is_mem) {
     token_t name = parser.previous;
-    bool is_global = compiler.scope_depth == 0;
+    bool is_top = compiler.scope_depth == 0;
 
     local_t *local = &compiler.locals[compiler.local_count];
     local->name = name;
     local->type = type;
-    local->is_on_stack = is_type(type, TYPE_STRUCT) && !is_pointer(type);
+    local->is_on_stack =
+        is_mem || (is_type(type, TYPE_STRUCT) && !is_pointer(type));
     local->is_param = false;
     local->is_absolute = false;
+    local->is_global = false;
     local->depth = compiler.scope_depth;
+
+    if (local->is_on_stack && !is_top) {
+        local->frame_index = compiler.sstack_count;
+        compiler.sstack_count += get_type_size(type);
+    }
 
     compiler.local_count++;
 
-    if (is_global) {
+    if (is_top) {
         local->is_absolute = true;
         local->is_on_stack = true;
         local->frame_index = 16384 + compiler.data_offset;
@@ -1879,15 +2128,11 @@ static void named_var(type_e type) {
     }
 
     if (match(TOKEN_EQUAL)) {
-        write_op((op_t){.type = OP_ADDRESS_VAR,
-                        .value_type = type,
-                        .offset = 0,
-                        .as.var_index = local - compiler.locals});
+        write_address_local(local, 0);
 
         expression(PREC_ASSIGNMENT);
 
-        stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
-        compiler.stack_count--; // Pop the last stack value
+        stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
 
         if (local->type != last_stackv->ctype) {
             if (isv_const(last_stackv->type)) {
@@ -1900,16 +2145,11 @@ static void named_var(type_e type) {
         materialize_vstack(last_stackv);
         if (local->type != last_stackv->ctype) {
             if (!isv_const(last_stackv->type)) {
-                write_op((op_t){.type = OP_CONVERT,
-                                .value_type = last_stackv->ctype,
-                                .as.convert.from = last_stackv->ctype,
-                                .as.convert.to = local->type});
+                write_convert(last_stackv->ctype, local->type);
             }
         }
 
-        write_op((op_t){.type = OP_STORE_VAR,
-                        .value_type = type,
-                        .as.var_index = local - compiler.locals});
+        write_store_local(local, local->type);
     }
 }
 
@@ -1927,6 +2167,7 @@ static void function(type_e return_type) {
     local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     local->is_on_stack = false;
     local->is_absolute = false;
+    local->is_global = false;
     local->is_param = false;
     local->depth = compiler.scope_depth;
 
@@ -1936,7 +2177,10 @@ static void function(type_e return_type) {
         write_string(" ");
     }
 
-    compiler.temp_max = 0;
+    compiler.sstack_count = 0;
+    compiler.sstack_atleast = 0;
+    compiler.used_fp = false;
+
     int frame_ptr = compiler.local_count;
     local_t *last_frame_ptr = compiler.frame_ptr;
 
@@ -1950,6 +2194,12 @@ static void function(type_e return_type) {
     // Parse parameters
     while (!check(TOKEN_RIGHT_PAREN) && !check(TOKEN_EOF)) {
         type_e param_type;
+        bool is_mem = false;
+
+        if (match(TOKEN_MEM)) {
+            is_mem = true;
+        }
+
         if ((param_type = match_type())) {
             consume(TOKEN_IDENTIFIER, "Expected parameter name.");
             token_t param_name = parser.previous;
@@ -1965,10 +2215,16 @@ static void function(type_e return_type) {
             local_t *local = &compiler.locals[compiler.local_count];
             local->name = param_name;
             local->type = param_type;
-            local->is_on_stack = false;
+            local->is_on_stack = is_mem;
             local->is_absolute = false;
+            local->is_global = false;
             local->is_param = true;
             local->depth = compiler.scope_depth;
+
+            if (is_mem) {
+                local->frame_index = compiler.sstack_count;
+                compiler.sstack_count += get_type_size(param_type);
+            }
 
             compiler.local_count++;
         } else {
@@ -2004,22 +2260,39 @@ static void function(type_e return_type) {
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function parameters.");
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
 
+    char *checkpoint = compiler.current;
+
     begin_scope();
     block();
     end_scope();
 
     if (compiler.no_op) {
+        compiler.current = checkpoint;
         return;
     }
 
-    int stack_length = 0;
+    int frame_size = compiler.sstack_count > compiler.sstack_atleast
+                         ? compiler.sstack_count
+                         : compiler.sstack_atleast;
+
+    int body_count = compiler.current - checkpoint;
+    char *scratch = malloc(body_count);
+    memcpy(scratch, checkpoint, body_count);
+
+    compiler.current = checkpoint;
+
+    if (frame_size > 0) {
+        compiler.used_fp = true;
+    }
+
+    if (compiler.used_fp) {
+        write_string("(local $fp i32)\n");
+    }
+
     for (int i = frame_ptr; i < compiler.local_count; i++) {
         local_t *local = &compiler.locals[i];
 
-        if (local->is_on_stack) {
-            local->frame_index = stack_length;
-            stack_length += get_type_size(local->type);
-        } else if (!local->is_param) {
+        if (!local->is_on_stack && !local->is_param) {
             write_string("(local $");
             write_int(i - frame_ptr);
             write_string(" ");
@@ -2028,567 +2301,71 @@ static void function(type_e return_type) {
         }
     }
 
-    int temp_base = stack_length;
-    stack_length += compiler.temp_max;
-
-    write_string("(local $_scratch i32)\n");
-
-    if (stack_length > 0) {
+    if (frame_size > 0) {
         write_string("global.get $__sp\n");
-        write_i32_const(stack_length);
+        write_i32_const(frame_size);
         write_string("i32.sub\n");
+        write_string("local.tee $fp\n");
         write_string("global.set $__sp\n");
     }
 
     for (int i = compiler.local_count - 1; i >= frame_ptr; --i) {
         local_t *local = &compiler.locals[i];
         if (local->is_on_stack && local->is_param) {
-            write_string("global.get $__sp\n");
+            write_string("local.get $fp\n");
             write_i32_const(local->frame_index);
             write_string("i32.add\n");
             write_string("local.get $");
-            write_token(local->name);
+            write_int(i - frame_ptr);
             write_string("\n");
             write_type(local->type);
             write_string(".store\n");
         }
     }
 
-    for (int i = 0; i < compiler.op_count; i++) {
-#ifdef DEBUG_OUTPUT
-        print_op(compiler.ops[i]);
-#endif
-        switch (compiler.ops[i].type) {
-        case OP_COPY_TEMP: { // pops last value on wasm-stack, copied to temp
-                             // and pushes address of temp on wasm-stack
-            op_t *op = &compiler.ops[i];
-            if (is_type(op->value_type, TYPE_STRUCT) &&
-                !is_pointer(op->value_type)) {
-                int structdef_index = get_type_data(op->value_type);
-                structdef_t *structdef = &compiler.structdefs[structdef_index];
-                int size = calculate_struct_size(structdef);
+    memcpy(compiler.current, scratch, body_count);
+    free(scratch);
 
-                int target_offset = temp_base + op->as.temp_offset;
-                write_string(";; Copy struct to temp\n");
-                write_string(
-                    "local.set $_scratch\n"); // store struct address in scratch
-                write_string("global.get $__sp\n");
-                write_i32_const(target_offset);
-                write_string("i32.add\n");
-                write_string("local.get $_scratch\n");
-                write_i32_const(size);
-                write_string("memory.copy\n");
-                write_string("global.get $__sp\n");
-                write_i32_const(target_offset);
-                write_string("i32.add\n");
-            } else {
-                error("OP_COPY_TEMP is only supported for struct types.");
-            }
+    compiler.current += body_count;
 
-            break;
-        }
-        case OP_ADD: {
-            op_t *op = &compiler.ops[i];
-
-            write_type(op->value_type);
-            write_string(".add\n");
-
-            break;
-        }
-        case OP_SUB: {
-            op_t *op = &compiler.ops[i];
-
-            write_type(op->value_type);
-            write_string(".sub\n");
-
-            break;
-        }
-        case OP_MUL: {
-            op_t *op = &compiler.ops[i];
-
-            write_type(op->value_type);
-            write_string(".mul\n");
-
-            break;
-        }
-        case OP_DIV: {
-            op_t *op = &compiler.ops[i];
-
-            write_type(op->value_type);
-            if (is_type(op->value_type, TYPE_I32) ||
-                is_type(op->value_type, TYPE_I64) ||
-                is_type(op->value_type, TYPE_I8) ||
-                is_type(op->value_type, TYPE_I16)) {
-                write_string(".div_s\n");
-            } else if (is_type(op->value_type, TYPE_F32) ||
-                       is_type(op->value_type, TYPE_F64)) {
-                write_string(".div\n");
-            } else {
-                error("Unsupported type for division.");
-            }
-
-            break;
-        }
-        case OP_NEGATE:
-            write_string("i32.eqz\n");
-            break;
-        case OP_ADDRESS_VAR: {
-            op_t *op = &compiler.ops[i];
-            local_t *local = &compiler.locals[op->as.var_index];
-            int offset = op->offset;
-
-            if (local->is_absolute) {
-                write_i32_const(local->frame_index);
-            } else if (local->is_on_stack) {
-                write_string("global.get $__sp\n");
-                offset += local->frame_index;
-            } else if (is_struct(local->type)) {
-                write_string("local.get $");
-                write_token(local->name);
-                write_string("\n");
-            } else {
-                break;
-            }
-
-            if (offset > 0) {
-                write_i32_const(offset);
-                write_string("i32.add\n");
-            }
-
-            break;
-        }
-        case OP_STORE_VAR: {
-            op_t *op = &compiler.ops[i];
-            local_t *local = &compiler.locals[op->as.var_index];
-
-            bool is_local_struct =
-                is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
-            bool is_op_struct = is_type(op->value_type, TYPE_STRUCT) &&
-                                !is_pointer(op->value_type);
-
-            if (is_op_struct) {
-                write_i32_const(calculate_struct_size(
-                    &compiler.structdefs[get_type_data(local->type)]));
-                write_string("memory.copy\n");
-            } else if (local->is_on_stack || is_local_struct) {
-                write_type(op->value_type);
-
-                if (is_type(op->value_type, TYPE_CHAR) ||
-                    is_type(op->value_type, TYPE_I8) ||
-                    is_type(op->value_type, TYPE_BOOL)) {
-                    write_string(".store8\n");
-                } else if (is_type(op->value_type, TYPE_I16)) {
-                    write_string(".store16\n");
-                } else {
-                    write_string(".store\n");
-                }
-            } else {
-                write_string("local.set $");
-                write_int(local - compiler.frame_ptr);
-                write_string("\n");
-            }
-            break;
-        }
-        case OP_LOAD_VAR: {
-            op_t *op = &compiler.ops[i];
-            local_t *local = &compiler.locals[op->as.var_index];
-
-            bool is_local_struct =
-                is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
-            bool is_op_struct = is_type(op->value_type, TYPE_STRUCT) &&
-                                !is_pointer(op->value_type);
-
-            if (is_op_struct) {
-                break;
-            }
-
-            if (is_local_struct) {
-                write_string(";; Load struct variable\n");
-                write_type(op->value_type);
-                write_string(".load\n");
-            } else if (local->is_on_stack) {
-                write_string(";; Load variable from stack\n");
-
-                write_type(op->value_type);
-                if (is_type(op->value_type, TYPE_CHAR) ||
-                    is_type(op->value_type, TYPE_BOOL)) {
-                    write_string(".load8_u\n");
-                } else if (is_type(op->value_type, TYPE_I8)) {
-                    write_string(".load8_s\n");
-                } else if (is_type(op->value_type, TYPE_I16)) {
-                    write_string(".load16_s\n");
-                } else {
-                    write_string(".load\n");
-                }
-            } else {
-                write_string("local.get $");
-                write_int(local - compiler.frame_ptr);
-                write_string("\n");
-            }
-
-            break;
-        }
-        case OP_LOAD:
-            if (is_struct(compiler.ops[i].value_type)) {
-                // structs are represented as addresses, since address is
-                // expected to be on the stack at this point, we don't need to
-                // do anything here
-            } else {
-                write_type(compiler.ops[i].value_type);
-
-                if (is_type(compiler.ops[i].value_type, TYPE_CHAR) ||
-                    is_type(compiler.ops[i].value_type, TYPE_BOOL)) {
-                    write_string(".load8_u\n");
-                } else if (is_type(compiler.ops[i].value_type, TYPE_I8)) {
-                    write_string(".load8_s\n");
-                } else if (is_type(compiler.ops[i].value_type, TYPE_I16)) {
-                    write_string(".load16_s\n");
-                } else {
-                    write_string(".load\n");
-                }
-            }
-            break;
-        case OP_STORE: {
-            op_t *op = &compiler.ops[i];
-
-            if (is_struct(op->value_type)) {
-                write_i32_const(calculate_struct_size(
-                    &compiler.structdefs[get_type_data(op->value_type)]));
-                write_string("memory.copy\n");
-            } else {
-                write_type(op->value_type);
-
-                if (is_type(op->value_type, TYPE_CHAR) ||
-                    is_type(op->value_type, TYPE_I8) ||
-                    is_type(op->value_type, TYPE_BOOL)) {
-                    write_string(".store8\n");
-                } else if (is_type(op->value_type, TYPE_I16)) {
-                    write_string(".store16\n");
-                } else {
-                    write_string(".store\n");
-                }
-            }
-
-            break;
-        }
-        case OP_CONST: {
-            op_t *op = &compiler.ops[i];
-
-            write_type(op->value_type);
-            write_string(".const ");
-            write_const(op->as.c, op->value_type);
-            write_string("\n");
-
-            break;
-        }
-        case OP_CONVERT: {
-            op_t *op = &compiler.ops[i];
-            type_e from = op->as.convert.from;
-            type_e to = op->as.convert.to;
-
-            if (is_pointer(from) && is_pointer(to)) {
-                // no conversion needed
-            } else if (is_pointer(from)) {
-                if (is_type(to, TYPE_I32)) {
-                    // no conversion needed
-                } else if (is_type(to, TYPE_I64)) {
-                    write_string("i64.extend_i32_s\n");
-                } else if (is_type(to, TYPE_I8)) {
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(to, TYPE_I16)) {
-                    write_string("i32.extend16_s\n");
-                } else if (is_type(to, TYPE_F32)) {
-                    error("Cannot convert pointer to f32.");
-                } else if (is_type(to, TYPE_F64)) {
-                    error("Cannot convert pointer to f64.");
-                } else if (is_type(to, TYPE_CHAR)) {
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(to, TYPE_BOOL)) {
-                    write_string("i32.const 0\n");
-                    write_string("i32.ne\n");
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_pointer(to)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
-                    is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
-                    is_type(from, TYPE_CHAR)) {
-                    // no conversion needed
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("i32.wrap_i64\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    error("Cannot convert f32 to pointer.");
-                } else if (is_type(from, TYPE_F64)) {
-                    error("Cannot convert f64 to pointer.");
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_I8)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I16)) {
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("i32.wrap_i64\n");
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("i32.trunc_f32_s\n");
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("i32.trunc_f64_s\n");
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_CHAR) ||
-                           is_type(from, TYPE_BOOL) || is_type(from, TYPE_I8)) {
-                    // no conversion needed
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_I16)) {
-                if (is_type(from, TYPE_I32)) {
-                    write_string("i32.extend16_s\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("i32.wrap_i64\n");
-                    write_string("i32.extend16_s\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("i32.trunc_f32_s\n");
-                    write_string("i32.extend16_s\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("i32.trunc_f64_s\n");
-                    write_string("i32.extend16_s\n");
-                } else if (is_type(from, TYPE_CHAR) ||
-                           is_type(from, TYPE_BOOL) || is_type(from, TYPE_I8) ||
-                           is_type(from, TYPE_I16)) {
-                    // no conversion needed
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_I32)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
-                    is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
-                    is_type(from, TYPE_CHAR)) {
-                    // no conversion needed
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("i32.wrap_i64\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("i32.trunc_f32_s\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("i32.trunc_f64_s\n");
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_I64)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
-                    is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
-                    is_type(from, TYPE_CHAR)) {
-                    write_string("i64.extend_i32_s\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    // no conversion needed
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("i64.trunc_f32_s\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("i64.trunc_f64_s\n");
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_F32)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
-                    is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
-                    is_type(from, TYPE_CHAR)) {
-                    write_string("f32.convert_i32_s\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("f32.convert_i64_s\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    // no conversion needed
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("f32.demote_f64\n");
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_F64)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
-                    is_type(from, TYPE_I16) || is_type(from, TYPE_BOOL) ||
-                    is_type(from, TYPE_CHAR)) {
-                    write_string("f64.convert_i32_s\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("f64.convert_i64_s\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("f64.promote_f32\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    // no conversion needed
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_BOOL)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I8) ||
-                    is_type(from, TYPE_I16) || is_type(from, TYPE_CHAR)) {
-                    write_string("i32.const 0\n");
-                    write_string("i32.ne\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("i64.const 0\n");
-                    write_string("i64.ne\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("f32.const 0.0\n");
-                    write_string("f32.ne\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("f64.const 0.0\n");
-                    write_string("f64.ne\n");
-                } else if (is_type(from, TYPE_BOOL)) {
-                    // no conversion needed
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else if (is_type(to, TYPE_CHAR)) {
-                if (is_type(from, TYPE_I32) || is_type(from, TYPE_I16)) {
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_I64)) {
-                    write_string("i32.wrap_i64\n");
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_F32)) {
-                    write_string("i32.trunc_f32_s\n");
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_F64)) {
-                    write_string("i32.trunc_f64_s\n");
-                    write_string("i32.extend8_s\n");
-                } else if (is_type(from, TYPE_CHAR) ||
-                           is_type(from, TYPE_BOOL) || is_type(from, TYPE_I8)) {
-                    // no conversion needed
-                } else {
-                    error("Unsupported type conversion.");
-                }
-            } else {
-                error("Unsupported type conversion.");
-            }
-
-            break;
-        }
-        case OP_CALL:
-            write_string("call $");
-            write_token(compiler.locals[compiler.ops[i].as.var_index].name);
-            write_string("\n");
-            break;
-        case OP_IF:
-            write_string("(if\n");
-            write_string("(then\n");
-            break;
-        case OP_IFR:
-            write_string("(if (result ");
-            write_type(compiler.ops[i].value_type);
-            write_string(")\n");
-
-            write_string("(then\n");
-            break;
-        case OP_ELSE:
-            write_string("(else\n");
-            break;
-        case OP_END:
-            write_string(")\n");
-            break;
-        case OP_LOOP: {
-            write_string("(loop $label");
-            write_int(compiler.ops[i].as.label_index);
-            write_string("\n");
-            break;
-        }
-        case OP_BLOCK: {
-            write_string("(block $label");
-            write_int(compiler.ops[i].as.label_index);
-            write_string("\n");
-            break;
-        }
-        case OP_JMP: {
-            write_string("br $label");
-            write_int(compiler.ops[i].as.label_index);
-            write_string("\n");
-            break;
-        }
-        case OP_JMPIF: {
-            write_string("br_if $label");
-            write_int(compiler.ops[i].as.label_index);
-            write_string("\n");
-            break;
-        }
-        case OP_PRINT: {
-            op_t *op = &compiler.ops[i];
-            if (is_pointer(op->value_type)) {
-                write_string("call $print_i32\n");
-            } else if (is_type(op->value_type, TYPE_I32) ||
-                       is_type(op->value_type, TYPE_I8) ||
-                       is_type(op->value_type, TYPE_I16) ||
-                       is_type(op->value_type, TYPE_BOOL) ||
-                       is_type(op->value_type, TYPE_CHAR)) {
-                write_string("call $print_i32\n");
-            } else if (is_type(op->value_type, TYPE_I64)) {
-                write_string("call $print_i64\n");
-            } else if (is_type(op->value_type, TYPE_F32)) {
-                write_string("call $print_f32\n");
-            } else if (is_type(op->value_type, TYPE_F64)) {
-                write_string("call $print_f64\n");
-            } else {
-                error("Unsupported type for print.");
-            }
-
-            break;
-        }
-        case OP_EQUAL: {
-            write_string("i32.eq\n");
-            break;
-        }
-        case OP_NEQUAL: {
-            write_string("i32.ne\n");
-            break;
-        }
-        case OP_GREATER: {
-            write_string("i32.gt_s\n");
-            break;
-        }
-        case OP_LESS: {
-            write_string("i32.lt_s\n");
-            break;
-        }
-        case OP_GREATER_EQUAL: {
-            write_string("i32.ge_s\n");
-            break;
-        }
-        case OP_LESS_EQUAL: {
-            write_string("i32.le_s\n");
-            break;
-        }
-        case OP_EQZ: {
-            write_string("i32.eqz\n");
-            break;
-        }
-        case OP_RETURN: {
-            write_string("return\n");
-            break;
-        }
-        default:
-            error("Unknown operation.");
-            break;
-        }
-    }
-
-    if (stack_length > 0) {
-        write_string("global.get $__sp\n");
-        write_i32_const(stack_length);
+    if (frame_size > 0) {
+        write_string("local.get $fp\n");
+        write_i32_const(frame_size);
         write_string("i32.add\n");
         write_string("global.set $__sp\n");
     }
 
-    compiler.op_count = 0;
     compiler.local_count = frame_ptr;
     compiler.frame_ptr = last_frame_ptr;
-    compiler.temp_max = 0;
+    compiler.used_fp = false;
 
     write_string(")\n");
 }
 
-static void typed_declaration(type_e decl_type) {
+static void typed_declaration(type_e decl_type, bool is_mem) {
     consume(TOKEN_IDENTIFIER, "Expected variable name.");
 
     if (check(TOKEN_LEFT_PAREN)) {
+        if (is_mem) {
+            error("Memory declarations cannot be functions.");
+            return;
+        }
+
         function(decl_type);
     } else {
-        named_var(decl_type);
+        named_var(decl_type, is_mem);
         consume(TOKEN_SEMICOLON, "Expected ';' after declaration.");
     }
+}
+
+static void mem_declaration() {
+    type_e decl_type = match_type();
+    if (!decl_type) {
+        error("Expected a type for memory declaration.");
+        return;
+    }
+
+    typed_declaration(decl_type, true);
 }
 
 static void struct_declaration() {
@@ -2644,7 +2421,7 @@ static void return_statement() {
     }
 
     if (match(TOKEN_SEMICOLON)) {
-        write_op((op_t){.type = OP_RETURN, .value_type = TYPE_VOID});
+        iwrite_return();
         return;
     }
 
@@ -2660,8 +2437,10 @@ static void declaration() {
 
     if (match(TOKEN_STRUCT)) {
         struct_declaration();
+    } else if (match(TOKEN_MEM)) {
+        mem_declaration();
     } else if ((decl_type = match_type())) {
-        typed_declaration(decl_type);
+        typed_declaration(decl_type, false);
     } else {
         if (match(TOKEN_PRINT)) {
             print_statement();
@@ -2689,6 +2468,7 @@ static void add_import_fn(const char *module, const char *name,
     local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     local->is_on_stack = false;
     local->is_absolute = false;
+    local->is_global = false;
     local->is_param = false;
     local->depth = 0;
 
@@ -2753,39 +2533,17 @@ static void module() {
     heap_base_local->name.start = "__heap_base";
     heap_base_local->name.length = 11;
     heap_base_local->type = TYPE_CHAR | TYPE_POINTER_FLAG;
-    heap_base_local->is_on_stack = true;
-    heap_base_local->is_absolute = true;
+    heap_base_local->is_on_stack = false;
+    heap_base_local->is_absolute = false;
     heap_base_local->is_param = false;
+    heap_base_local->is_global = true;
     heap_base_local->depth = 0;
-    heap_base_local->frame_index = 0;
-
-    int heap_base = 16384;
-    int prev_local_count = compiler.local_count;
-    lexer_t lsnap = lexer_snapshot();
-    parser_t psnap = parser_snapshot();
-
-    compiler.no_op = true;
-    while (parser.current.type != TOKEN_EOF) {
-        declaration();
-    }
-
-    heap_base = 16384 + compiler.data_offset;
-    heap_base_local->frame_index = heap_base;
-
-    compiler.fundef_count = 0;
-    compiler.structdef_count = 0;
-    compiler.local_count = prev_local_count;
-    compiler.const_count = 0;
-    compiler.data_offset = 0;
-    compiler.loop_counter = 0;
-
-    compiler.no_op = false;
-    lexer_restore(&lsnap);
-    parser_restore(&psnap);
 
     while (parser.current.type != TOKEN_EOF) {
         declaration();
     }
+
+    heap_base_local->frame_index = 16384 + compiler.data_offset;
 
     for (int i = 0; i < compiler.const_count; i++) {
         const_t *const_value = &compiler.consts[i];
@@ -2881,7 +2639,7 @@ static void module() {
 
     write_string("(global $__sp (mut i32) (i32.const 16384))\n");
     write_string("(global $__heap_base i32 (i32.const ");
-    write_int(heap_base);
+    write_int(heap_base_local->frame_index);
     write_string("))\n");
 
     write_string("(export \"memory\" (memory $0))\n");

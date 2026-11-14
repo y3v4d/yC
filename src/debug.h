@@ -4,6 +4,7 @@
 #include "lexer.h"
 
 #define DEBUG_OUTPUT
+// #define DEBUG_OUTPUT_TOKEN
 #define DEBUG_OUTPUT_WAT
 
 void print_token(token_t token);

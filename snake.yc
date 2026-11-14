@@ -49,9 +49,9 @@ void ctx_draw_rect(i32 x, i32 y, i32 w, i32 h, i32 c) {
 }
 
 void entity_draw(entity_t* e) {
-    i32 rx = (*e).x * s;
-    i32 ry = (*e).y * s;
-    i32 c = (*e).color;
+    i32 rx = e->x * s;
+    i32 ry = e->y * s;
+    i32 c = e->color;
 
     ctx_draw_rect(rx, ry, s, s, c);
 }
@@ -81,15 +81,15 @@ void player_draw_head(i32 x, i32 y, i32 c, i32 dir) {
 }
 
 void player_draw(player_t* p) {
-    i32 x = (*p).ent.x;
-    i32 y = (*p).ent.y;
-    i32 size = (*p).size;
+    i32 x = p->ent.x;
+    i32 y = p->ent.y;
+    i32 size = p->size;
 
-    for(i32 i = 0; i < (*p).size; i = i + 1) {
-        i32 dir = (*p).body[i];
+    for(i32 i = 0; i < p->size; i = i + 1) {
+        i32 dir = p->body[i];
 
         if(i != 0) {
-            ctx_draw_rect(x * s, y * s, s, s, (*p).ent.color);
+            ctx_draw_rect(x * s, y * s, s, s, p->ent.color);
         }
 
         if(dir == 0) {
@@ -125,26 +125,26 @@ void player_draw(player_t* p) {
         }
     }
 
-    player_draw_head((*p).ent.x, (*p).ent.y, (*p).ent.color, (*p).body[0]);
+    player_draw_head(p->ent.x, p->ent.y, p->ent.color, p->body[0]);
 }
 
 void player_init(player_t* p) {
-    (*p).ent.x = 4;
-    (*p).ent.y = 4;
-    (*p).ent.color = 2;
-    (*p).body = malloc(PLAYER_MAX_SIZE * sizeof(i8));
-    (*p).size = 3;
-    (*p).dir = 4;
+    p->ent.x = 4;
+    p->ent.y = 4;
+    p->ent.color = 2;
+    p->body = malloc(PLAYER_MAX_SIZE * sizeof(i8));
+    p->size = 3;
+    p->dir = 4;
 
     for(i32 i = 0; i < PLAYER_MAX_SIZE; i = i + 1) {
-        (*p).body[i] = 4;
+        p->body[i] = 4;
     }
 }
 
 void apple_init(entity_t* e) {
-    (*e).x = rand(0, grid_w - 1);
-    (*e).y = rand(0, grid_h - 1);
-    (*e).color = 12;
+    e->x = rand(0, grid_w - 1);
+    e->y = rand(0, grid_h - 1);
+    e->color = 12;
 }
 
 void mainloop() {
@@ -253,6 +253,7 @@ void mainloop() {
 
             if(d != 4 && player.ent.x == x && player.ent.y == y) {
                 game_over = true;
+                puts("Game Over...");
             }
         }
     }
@@ -268,6 +269,8 @@ void mainloop() {
 }
 
 void main() {
+    puts("Snake in yC!");
+
     grid_w = w / s;
     grid_h = h / s;
 

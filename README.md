@@ -1,6 +1,6 @@
 # yC - C-like toy language
 
-yC is a toy programming language, similar to C. It features static typing, functions, structs, pointers and basic flow control. It's primary compilation target is WebAssembly (through WebAssembly text format), but in the future I'm planning to add support for other native architectures.
+yC is a toy programming language, similar to C. It features static typing, functions, structs, pointers and flow control. It's primary compilation target is WebAssembly (through WebAssembly text format), but in the future I'm planning to add support for other native architectures.
 Both parser and lexer are hand-written, and the compiler is written in C (not self-hosted yet). The language is still in early development, so expect bugs and missing features.
 
 ## Features
@@ -8,17 +8,17 @@ Both parser and lexer are hand-written, and the compiler is written in C (not se
 A (bit bigger) list of features that yC currently supports:
 
 - **Hand-written Lexer** - tokenizes the input source code
-- **Hand-written Parser** - Pratt-parser that generates the WAT output directly (without an AST) in a single pass. In most places it first generates an intermidiate representation in form of simple opcodes which are later lowered to WAT. This is done to simplify the code generation and make it easier to add new features and targets in the future.
+- **Hand-written Parser** - Pratt-parser that generates the WAT output directly (without an AST) in a single pass 
 - **Static typing** - yC is a statically typed language, meaning that types are checked at compile time. Current primitive types are: i8, i16, i32, i64, f32, f64, bool, void (only as a return type for functions), char. Language also supports user-defined types (struct) and pointers, as well as implicit and explicit type casting.
 - **Functions** - can be defined and called with parameters
 - **Structs** - user-defined types that can contain multiple fields
-- **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name.
+- **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name. There is also support for `->` operator which is a shortcut for dereferncing a struct pointer and accessing it's field at the same time (ex. `obj->a` is the same as `(*obj).a`).
 - **Flow control** - if/else statements, for and while loops, and (&&) opertion, or (||) operation, not (!) operation, comparison operators (==, !=, <, >, <=, >=)
-- **Structs** - user-defined types that can contain multiple fields. Structs as function parameters currently are only supported to be passed by value (utilizing similar copy mechanism C uses).
+- **Structs** - user-defined types that can contain multiple fields. Structs as function parameters currently are supported to be passed by a value (utilizing similar copy mechanism C uses), or by a pointer.
 - **Arrays** - C-like arrays, where every pointer is an array of elements of the same type, accessible through pointer arithmetic, ex. `*(p + 1)` or bracket notation `p[1]`. There are no bounds checks or fixed sized arrays (yet).
-- **Shadow stack** - stack implemented in WebAssembly linear memory, used for storing variables. When possible the compiler will try to use WebAssembly's native local variables instead of the shadow stack, but all structs and addressed variables will be stored on the shadow stack. Currently, the allocated memory for shadow stack is 4kb and is not configurable. In the future I plan to add support for specifying the size of the shadow stack on compilation time.
+- **Shadow stack** - stack implemented in WebAssembly linear memory, used for storing variables. By default, all function-local primitive type variables are always declared as wasm locals, meaning they can't be addressed. To be able to address a variable, a `mem` prefix can be used, which forces a variable to live on the shadow stack instead. This is done purely because of the single-pass nature of the compiler. Currently, the allocated memory for shadow stack is 4kb and is not configurable. In the future I plan to add support for specifying the size of the shadow stack on compilation time.
 - **Variable hoisting** - variables can be declared anywhere in the scope, but they will be always hoisted to the top of the running function. This is done due to necessity because WebAssembly local variables must be declared at the top of the function. Compiler should disallow using variables declared in an inner scope (like if statement) in an outer scope, but that's not fully implemented yet and trying to use such variable might result in undefined behavior.
-- **Built-in statements** - print statement for printing values (currently supported i32, i64) to the console. It's done through importing a function from the host environment (in this case Node.js). In the future I plan to add support for more built-in statements and functions, like reading input from the console, file I/O, etc.
+- **Built-in statements** - print statement for printing values (currently supported i8, i16, i32, i64, f32, f64) to the console. It's done through importing a function from the host environment (in this case Node.js). In the future I plan to add support for more built-in statements and functions, like reading input from the console, file I/O, etc.
 
 ## Prerequisites
 
@@ -61,7 +61,7 @@ This will create a .wat and .wasm files in the same directory as source file on 
 To run snake example, first you need to compile the `snake.yc` file using the command above, then install an `http-server` node package **globally** and run the following command:
 
 ```bash
-http-server -c-1 build
+http-server -c-1 .
 ```
 
 Then open the `http://localhost:8080` in your browser and you should see the snake game running.
@@ -100,6 +100,7 @@ void main() {
 - Add better error handling and reporting
 - Add support for unsigned integer types (u8, u16, u32, u64)
 - Add support for function pointers
+- Add support for else if
 - Add binary operation support
 - Add support for constructors/destructors for structs (C++ like)
 - Add support for modules and imports/exports
@@ -109,7 +110,8 @@ void main() {
 
 ## References
 
-- [Crafting Interpreters](https://craftinginterpreters.com) - A great book on building your first programming language, teaches all the basic and advanced concepts of programming languages and compilers. Nearly all of the current parser implementation is inspiried from this book alone.
+- [Crafting Interpreters](https://craftinginterpreters.com) - A great book on building your first programming language, teaches all the basic and advanced concepts of programming languages and compilers. Nearly the entire core of the parser implementation is inspiried from this book alone.
 - [TinyCC](https://bellard.org/tcc/tcc-doc.html) - A small C compiler, used as a reference for the yC language syntax and semantics.
 - [WebAssembly](https://webassembly.org/) - The compilation target of yC, a low-level binary format for the web.
 - [WebAssembly MDN Documentation](https://developer.mozilla.org/en-US/docs/WebAssembly) - A great resource for learning about WebAssembly and its features.
+- [WebAssembly Specification](https://webassembly.github.io/spec/core/index.html) - Official WebAssembly specification.

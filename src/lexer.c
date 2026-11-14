@@ -10,9 +10,6 @@ void lexer_init(const char *source) {
     lexer.line = 1;
 }
 
-lexer_t lexer_snapshot() { return lexer; }
-void lexer_restore(lexer_t *snapshot) { lexer = *snapshot; }
-
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
 static bool is_alpha(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
@@ -179,6 +176,8 @@ static tokentype_e identifier_type() {
         return check_keyword(1, 4, "hile", TOKEN_WHILE);
     case 'r':
         return check_keyword(1, 5, "eturn", TOKEN_RETURN);
+    case 'm':
+        return check_keyword(1, 2, "em", TOKEN_MEM);
     default:
         return TOKEN_IDENTIFIER;
     }
@@ -213,6 +212,9 @@ token_t lexer_token() {
         if (is_digit(peek())) {
             token_t n = token_number();
             return n;
+        } else if (peek() == '>') {
+            advance();
+            return token_create(TOKEN_ARROW);
         }
 
         return token_create(TOKEN_MINUS);

@@ -130,10 +130,17 @@ static void repl() {
         }
 
         char *output = compile(input);
-        if (output) {
-#ifdef DEBUG_OUTPUT
-            printf("Compiled output:\n%s\n", output);
+#ifdef DEBUG_OUTPUT_WAT
+        FILE *wat_file = fopen("build/out.wat", "wb");
+        if (!wat_file) {
+            fprintf(stderr, "Failed to open output.wat for writing\n");
+            continue;
+        }
+
+        fwrite(output, 1, strlen(output), wat_file);
+        fclose(wat_file);
 #endif
+        if (output) {
             execute_wasm(output);
         } else {
             printf("Compilation failed.\n");
