@@ -1,6 +1,6 @@
-i32* bump_pointer = &__heap_base;
-char* malloc(i32 n) {
-    i32* r = bump_pointer;
+i8* bump_pointer = &__heap_base;
+i8* malloc(i32 n) {
+    i8* r = bump_pointer;
     bump_pointer = bump_pointer + n;
 
     return r;

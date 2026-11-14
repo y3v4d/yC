@@ -737,10 +737,13 @@ static void iwrite_const(type_e type, const_u c) {
 }
 
 static void iwrite_load(type_e type) {
+    if (is_pointer(type)) {
+        write_string("i32.load\n");
+        return;
+    }
+
     if (is_struct(type)) {
-        // structs are represented as addresses, since address is
-        // expected to be on the stack at this point, we don't need to
-        // do anything here
+        error("Cannot load a struct variable.");
         return;
     }
 
@@ -757,6 +760,11 @@ static void iwrite_load(type_e type) {
 }
 
 static void iwrite_store(type_e type) {
+    if (is_pointer(type)) {
+        write_string("i32.store\n");
+        return;
+    }
+
     if (is_struct(type)) {
         write_i32_const(
             calculate_struct_size(&compiler.structdefs[get_type_data(type)]));
@@ -1265,6 +1273,8 @@ static void binary() {
     expression((prec_e)(precedence + 1));
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(b);
+
     compiler.stack_count -= 2;
 
     if (!is_numeric_type(a->ctype) || !is_numeric_type(b->ctype)) {
@@ -1272,15 +1282,28 @@ static void binary() {
         return;
     }
 
-    if (is_pointer(a->ctype) || is_pointer(b->ctype)) {
-        if (op_type != TOKEN_PLUS && op_type != TOKEN_MINUS) {
-            error("Binary operator can only be applied to pointer types with "
-                  "'+' or '-'.");
-            return;
-        }
+    if (!is_pointer(a->ctype) && is_pointer(b->ctype)) {
+        error("Pointer arithmetic can only be performed with the pointer as "
+              "the first operand.");
+        return;
+    }
 
-        type_e other_type = is_pointer(a->ctype) ? b->ctype : a->ctype;
-        if (is_pointer(other_type)) {
+    if (is_pointer(a->ctype) && !is_pointer(b->ctype) &&
+        op_type != TOKEN_PLUS && op_type != TOKEN_MINUS) {
+        error("Pointer arithmetic can only be performed with '+' or '-' with "
+              "a number.");
+        return;
+    }
+
+    if (is_pointer(a->ctype) && is_pointer(b->ctype) &&
+        op_type != TOKEN_MINUS) {
+        error("Pointer arithmetic can only be performed with '-' with two "
+              "pointers.");
+        return;
+    }
+
+    if (is_pointer(a->ctype)) {
+        if (is_pointer(b->ctype)) {
             type_e atype = a->ctype & ~TYPE_POINTER_FLAG;
             type_e btype = b->ctype & ~TYPE_POINTER_FLAG;
             if (atype != btype) {
@@ -1288,25 +1311,33 @@ static void binary() {
                       "pointer types.");
                 return;
             }
-        } else if (!is_int_type(other_type)) {
+        } else if (!is_int_type(b->ctype)) {
             error(
                 "Pointer arithmetic can only be performed with integer types.");
             return;
+        } else {
+            int size = get_type_size(a->ctype & ~TYPE_POINTER_FLAG);
+            if (size > 1) {
+                iwrite_const(TYPE_I32, (const_u){.i32 = size});
+                iwrite_mul(TYPE_I32);
+            }
         }
     }
-
-    materialize_vstack(b);
 
     if (!is_pointer(a->ctype) && !is_pointer(b->ctype) &&
         a->ctype != b->ctype) {
         if (isv_const(b->type)) {
             b->as.c = cast_const(b->as.c, b->ctype, a->ctype);
         } else {
-            write_convert(b->ctype, a->ctype);
+            if (!write_convert(b->ctype, a->ctype)) {
+                return;
+            }
         }
+
+        b->ctype = a->ctype;
     }
 
-    type_e target_type = is_pointer(b->ctype) ? b->ctype : a->ctype;
+    type_e target_type = a->ctype;
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
@@ -1319,6 +1350,15 @@ static void binary() {
         break;
     case TOKEN_MINUS:
         iwrite_sub(target_type);
+
+        if (is_pointer(a->ctype) && is_pointer(b->ctype)) {
+            int size = get_type_size(a->ctype & ~TYPE_POINTER_FLAG);
+            if (size > 1) {
+                iwrite_const(TYPE_I32, (const_u){.i32 = size});
+                iwrite_div(TYPE_I32);
+            }
+        }
+
         break;
     case TOKEN_STAR:
         iwrite_mul(target_type);
