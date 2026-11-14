@@ -1,0 +1,23 @@
+i8* heap8 = &__heap_base;
+i32* heap32 = &__heap_base;
+
+void main() {
+    mem i8 t = 10;
+    mem i8* tp = &t;
+    i32* n = (i32*)7;
+    i32* d = (i32*)4;
+    i32 a = 5;
+
+    print t;
+    print *tp;
+
+    puts("heap8: ");
+    print heap8;
+    print heap8 + a;
+    print heap8 + 1 + 1 - 1;
+
+    puts("heap32: ");
+    print heap32;
+    print (i16*)heap32 + 1;
+    print n - d;
+}

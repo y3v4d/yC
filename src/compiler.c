@@ -1228,14 +1228,65 @@ static void number() {
     stackv->offset = 0;
 
     bool has_decimal = false;
+    bool is_binary = false;
+    bool is_hex = false;
+
     for (int i = 0; i < parser.previous.length; i++) {
+        if (parser.previous.start[i] == 'x' ||
+            parser.previous.start[i] == 'X') {
+            is_hex = true;
+            break;
+        }
+
+        if (parser.previous.start[i] == 'b' ||
+            parser.previous.start[i] == 'B') {
+            is_binary = true;
+            break;
+        }
+
         if (parser.previous.start[i] == '.') {
             has_decimal = true;
             break;
         }
     }
 
-    if (!has_decimal) {
+    if (is_hex) {
+        bool is_negative = parser.previous.start[0] == '-';
+        int v = 0;
+
+        for (int i = is_negative ? 3 : 2; i < parser.previous.length; i++) {
+            char c = parser.previous.start[i];
+            if (c >= '0' && c <= '9') {
+                v = (v << 4) | (c - '0');
+            } else if (c >= 'a' && c <= 'f') {
+                v = (v << 4) | (c - 'a' + 10);
+            } else if (c >= 'A' && c <= 'F') {
+                v = (v << 4) | (c - 'A' + 10);
+            } else {
+                error("Invalid hexadecimal literal.");
+                return;
+            }
+        }
+
+        stackv->ctype = TYPE_I32;
+        stackv->as.c.i32 = v * (is_negative ? -1 : 1);
+    } else if (is_binary) {
+        bool is_negative = parser.previous.start[0] == '-';
+        int v = 0;
+
+        for (int i = is_negative ? 3 : 2; i < parser.previous.length; i++) {
+            char c = parser.previous.start[i];
+            if (c == '0' || c == '1') {
+                v = (v << 1) | (c - '0');
+            } else {
+                error("Invalid binary literal.");
+                return;
+            }
+        }
+
+        stackv->ctype = TYPE_I32;
+        stackv->as.c.i32 = v * (is_negative ? -1 : 1);
+    } else if (!has_decimal) {
         stackv->ctype = TYPE_I32;
         stackv->as.c.i32 = atoi(parser.previous.start);
     } else {

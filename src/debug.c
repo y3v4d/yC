@@ -6,6 +6,9 @@
 
 static void print_token_type(tokentype_e type) {
     switch (type) {
+    case TOKEN_NONE:
+        printf("TOKEN_NONE");
+        break;
     case TOKEN_PLUS:
         printf("TOKEN_PLUS");
         break;

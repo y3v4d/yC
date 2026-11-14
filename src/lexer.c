@@ -65,8 +65,27 @@ static token_t token_create(tokentype_e type) {
 }
 
 static token_t token_number() {
-    if (peek() == '-') {
+    if (peek() == '0' && (peek_next() == 'b' || peek_next() == 'B')) {
         advance();
+        advance();
+
+        while (peek() == '0' || peek() == '1') {
+            advance();
+        }
+
+        return token_create(TOKEN_NUMBER);
+    }
+
+    if (peek() == '0' && (peek_next() == 'x' || peek_next() == 'X')) {
+        advance();
+        advance();
+
+        while (is_digit(peek()) || (peek() >= 'a' && peek() <= 'f') ||
+               (peek() >= 'A' && peek() <= 'F')) {
+            advance();
+        }
+
+        return token_create(TOKEN_NUMBER);
     }
 
     while (is_digit(peek())) {
@@ -198,20 +217,21 @@ token_t lexer_token() {
     if (is_at_end())
         return token_create(TOKEN_EOF);
 
-    char c = advance();
+    char c = peek();
     if (is_digit(c)) {
         return token_number();
     } else if (is_alpha(c)) {
         return token_identifier();
     }
 
+    c = advance();
+
     switch (c) {
     case '+':
         return token_create(TOKEN_PLUS);
     case '-':
         if (is_digit(peek())) {
-            token_t n = token_number();
-            return n;
+            return token_number();
         } else if (peek() == '>') {
             advance();
             return token_create(TOKEN_ARROW);
