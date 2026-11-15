@@ -151,8 +151,12 @@ static tokentype_e identifier_type() {
                 return check_keyword(2, 0, "", TOKEN_I8);
             case '1':
                 return check_keyword(2, 1, "6", TOKEN_I16);
+            case 'm':
+                return check_keyword(2, 4, "port", TOKEN_IMPORT);
             }
         }
+
+        return TOKEN_IDENTIFIER;
     case 'f':
         if (lexer.current - lexer.start > 1) {
             switch (lexer.start[1]) {

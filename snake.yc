@@ -1,3 +1,15 @@
+import "core" {
+    void puts(i8* s);
+
+    i32 rand(i32 from, i32 to);
+    bool get_key(i8 c);
+}
+
+import "ctx" {
+    void ctx_fill(i32 color);
+    void ctx_put_pixel(i32 x, i32 y, i32 color);
+}
+
 i8* bump_pointer = &__heap_base;
 i8* malloc(i32 n) {
     i8* r = bump_pointer;

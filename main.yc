@@ -1,7 +1,16 @@
-void main() {
-    i32 a = 0b00110 & -0b00100;
-    i8 b = 0b1100 & 0b0111 | 0b10000;
+import "core" {
+    void putc(i8 c);
+    void puti(i32 i);
+    void puts(i8* s);
+}
 
-    print a;
-    print b;
+void main() {
+    i8 a = 'a';
+    i8 b = '\n';
+    i8* text = "Hello!\n";
+
+    putc(a);
+    puti(b);
+    puts(text);
+    puti(text[6]);
 }

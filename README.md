@@ -69,19 +69,22 @@ Then open the `http://localhost:8080` in your browser and you should see the sna
 ## Example code
 
 ```c
+import "core" {
+    void puti(i32 i);
+}
+
 struct point_t {
     i32 x;
     i64 y;
 };
 
-void print_point(point_t point) {
-    print point.a;
-    print point.b;
+void print_point(point_t* point) {
+    puti(point->a);
+    puti(point->b);
 }
 
 void main() {
     bool is_valid = true;
-    
     point_t p;
 
     if(is_valid) {
@@ -91,7 +94,7 @@ void main() {
     }
     
     p.y = 20;
-    print_point(p);
+    print_point(&p);
 }
 ```
 
@@ -102,7 +105,7 @@ void main() {
 - Add support for function pointers
 - Add support for else if
 - Add support for constructors/destructors for structs (C++ like)
-- Add support for modules and imports/exports
+- Add support for file includes and function exports
 - Add unit tests for the compiler
 - Add a standard library
 - Self-hosting

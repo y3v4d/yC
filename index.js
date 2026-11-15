@@ -15,6 +15,12 @@ async function loadWasm() {
             putc: (arg) => {
                 stdout.write(String.fromCharCode(arg));
             },
+            puti: (arg) => {
+                stdout.write(arg.toString());
+            },
+            putf: (arg) => {
+                stdout.write(arg.toString());
+            },
             puts: (arg) => {
                 let length = 0;
                 const bytes = new Uint8Array(instance.exports.memory.buffer, arg);
@@ -28,7 +34,7 @@ async function loadWasm() {
                 const bytesToDecode = bytes.slice(0, length);
                 const str = new TextDecoder("utf-8").decode(bytesToDecode);
 
-                console.log(str);
+                stdout.write(str);
             },
             rand: (from, to) => {
                 return Math.floor(Math.random() * (to - from + 1)) + from;

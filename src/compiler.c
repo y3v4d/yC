@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {
     token_t current;
@@ -86,6 +87,7 @@ typedef struct {
     int param_count;
 
     type_e return_type;
+    bool is_imported;
 } fundef_t;
 
 typedef enum {
@@ -151,6 +153,7 @@ typedef struct {
     int loop_counter;
     bool no_op;
     bool used_fp;
+    bool wrote_default_memory;
 } compiler_t;
 
 typedef enum {
@@ -191,6 +194,7 @@ static void compiler_init() {
     compiler.scope_depth = 0;
     compiler.no_op = false;
     compiler.used_fp = false;
+    compiler.wrote_default_memory = false;
 
     compiler.const_count = 0;
     compiler.data_offset = 0;
@@ -1150,6 +1154,8 @@ static void write_store_local(local_t *local, type_e type) {
     }
 }
 
+static void write_default_memory() { write_string("(memory $0 1)\n"); }
+
 // materialize vstack value on the wasm stack
 static void materialize_vstack(stackv_t *stackv) {
     if (isv_lvalue(stackv->type)) {
@@ -1871,6 +1877,32 @@ static void character() {
     stackv->offset = 0;
 
     char c = parser.previous.start[1];
+    if (c == '\\' && parser.previous.length > 2) {
+        switch (parser.previous.start[2]) {
+        case 'n':
+            c = '\n';
+            break;
+        case 't':
+            c = '\t';
+            break;
+        case 'r':
+            c = '\r';
+            break;
+        case '\\':
+            c = '\\';
+            break;
+        case '\'':
+            c = '\'';
+            break;
+        case '\"':
+            c = '\"';
+            break;
+        default:
+            error("Unknown escape sequence.");
+            return;
+        }
+    }
+
     stackv->as.c.i32 = (int)c;
 }
 
@@ -2354,6 +2386,7 @@ static void function(type_e return_type) {
     fundef->name = name;
     fundef->return_type = return_type;
     fundef->param_count = 0;
+    fundef->is_imported = false;
 
     // Parse parameters
     while (!check(TOKEN_RIGHT_PAREN) && !check(TOKEN_EOF)) {
@@ -2507,6 +2540,11 @@ static void function(type_e return_type) {
 }
 
 static void typed_declaration(type_e decl_type, bool is_mem) {
+    if (!compiler.wrote_default_memory) {
+        write_default_memory();
+        compiler.wrote_default_memory = true;
+    }
+
     consume(TOKEN_IDENTIFIER, "Expected variable name.");
 
     if (check(TOKEN_LEFT_PAREN)) {
@@ -2596,39 +2634,12 @@ static void return_statement() {
     materialize_vstack(last_stackv);
 }
 
-static void declaration() {
-    type_e decl_type;
-
-    if (match(TOKEN_STRUCT)) {
-        struct_declaration();
-    } else if (match(TOKEN_MEM)) {
-        mem_declaration();
-    } else if ((decl_type = match_type())) {
-        typed_declaration(decl_type, false);
-    } else {
-        if (match(TOKEN_PRINT)) {
-            print_statement();
-        } else if (match(TOKEN_IF)) {
-            if_statement();
-        } else if (match(TOKEN_WHILE)) {
-            while_statement();
-        } else if (match(TOKEN_FOR)) {
-            for_statement();
-        } else if (match(TOKEN_RETURN)) {
-            return_statement();
-        } else {
-            expression(PREC_ASSIGNMENT);
-            consume(TOKEN_SEMICOLON, "Expected ';' after declaration.");
-        }
-    }
-}
-
-static void add_import_fn(const char *module, const char *name,
-                          type_e return_type, int param_count,
+static void add_import_fn(const char *module, int module_len, const char *name,
+                          int name_len, type_e return_type, int param_count,
                           type_e *param_types) {
     local_t *local = &compiler.locals[compiler.local_count++];
     local->name.start = name;
-    local->name.length = strlen(name);
+    local->name.length = name_len;
     local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
     local->is_on_stack = false;
     local->is_absolute = false;
@@ -2638,8 +2649,9 @@ static void add_import_fn(const char *module, const char *name,
 
     fundef_t *fundef = &compiler.fundefs[compiler.fundef_count++];
     fundef->name.start = name;
-    fundef->name.length = strlen(name);
+    fundef->name.length = name_len;
     fundef->return_type = return_type;
+    fundef->is_imported = true;
     fundef->param_count = param_count;
     fundef->params = (fielddef_t *)malloc(sizeof(fielddef_t) * param_count);
 
@@ -2650,11 +2662,11 @@ static void add_import_fn(const char *module, const char *name,
     }
 
     write_string("(import \"");
-    write_string(module);
+    write_string_length(module, module_len);
     write_string("\" \"");
-    write_string(name);
+    write_string_length(name, name_len);
     write_string("\" (func $");
-    write_string(name);
+    write_string_length(name, name_len);
     write_string(" ");
 
     if (param_count > 0) {
@@ -2676,22 +2688,90 @@ static void add_import_fn(const char *module, const char *name,
     write_string("))\n");
 }
 
+static void import_statement() {
+    if (compiler.wrote_default_memory) {
+        error("Import statements can only appear before any declaration.");
+        return;
+    }
+
+    consume(TOKEN_STRING_LITERAL, "Expected module name after 'import'.");
+    token_t module_name = parser.previous;
+
+    consume(TOKEN_LEFT_BRACE, "Expected '{' after module name.");
+
+    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+        type_e return_type = match_type();
+        if (!return_type) {
+            error("Expected function declaration inside module import.");
+            return;
+        }
+
+        consume(TOKEN_IDENTIFIER, "Expected function name after type.");
+        token_t function_name = parser.previous;
+
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
+
+        type_e params[32];
+        int param_count = 0;
+        while (!check(TOKEN_RIGHT_PAREN) && !check(TOKEN_EOF)) {
+            type_e param_type = match_type();
+            if (!param_type) {
+                error("Expected type parameter.");
+                return;
+            }
+
+            params[param_count++] = param_type;
+            consume(TOKEN_IDENTIFIER,
+                    "Expected an identifier after parameter type.");
+
+            if (!check(TOKEN_RIGHT_PAREN)) {
+                consume(TOKEN_COMMA,
+                        "Expected ',' or ')' after parameter identifier.");
+            }
+        }
+
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after function parameters.");
+        consume(TOKEN_SEMICOLON, "Expected ';' after function declaration.");
+
+        add_import_fn(module_name.start + 1, module_name.length - 2,
+                      function_name.start, function_name.length, return_type,
+                      param_count, params);
+    }
+
+    consume(TOKEN_RIGHT_BRACE, "Expected '}' after module import.");
+}
+
+static void declaration() {
+    type_e decl_type;
+
+    if (match(TOKEN_STRUCT)) {
+        struct_declaration();
+    } else if (match(TOKEN_MEM)) {
+        mem_declaration();
+    } else if ((decl_type = match_type())) {
+        typed_declaration(decl_type, false);
+    } else {
+        if (match(TOKEN_IMPORT)) {
+            import_statement();
+        } else if (match(TOKEN_PRINT)) {
+            print_statement();
+        } else if (match(TOKEN_IF)) {
+            if_statement();
+        } else if (match(TOKEN_WHILE)) {
+            while_statement();
+        } else if (match(TOKEN_FOR)) {
+            for_statement();
+        } else if (match(TOKEN_RETURN)) {
+            return_statement();
+        } else {
+            expression(PREC_ASSIGNMENT);
+            consume(TOKEN_SEMICOLON, "Expected ';' after declaration.");
+        }
+    }
+}
+
 static void module() {
     write_string("(module\n");
-    write_string("(import \"core\" \"print\" (func $print_i32 (param i32)))\n");
-    write_string("(import \"core\" \"print\" (func $print_i64 (param i64)))\n");
-    write_string("(import \"core\" \"print\" (func $print_f32 (param f32)))\n");
-    write_string("(import \"core\" \"print\" (func $print_f64 (param f64)))\n");
-
-    add_import_fn("core", "putc", TYPE_VOID, 1, (type_e[]){TYPE_I32});
-    add_import_fn("core", "puts", TYPE_VOID, 1, (type_e[]){TYPE_I32});
-    add_import_fn("core", "rand", TYPE_I32, 2, (type_e[]){TYPE_I32, TYPE_I32});
-    add_import_fn("core", "get_key", TYPE_BOOL, 1, (type_e[]){TYPE_I32});
-    add_import_fn("ctx", "ctx_put_pixel", TYPE_VOID, 3,
-                  (type_e[]){TYPE_I32, TYPE_I32, TYPE_I32});
-    add_import_fn("ctx", "ctx_fill", TYPE_VOID, 1, (type_e[]){TYPE_I32});
-
-    write_string("(memory $0 1)\n");
 
     local_t *heap_base_local = &compiler.locals[compiler.local_count++];
     heap_base_local->name.start = "__heap_base";
@@ -2809,6 +2889,10 @@ static void module() {
     write_string("(export \"memory\" (memory $0))\n");
     for (int i = 0; i < compiler.fundef_count; ++i) {
         fundef_t *def = &compiler.fundefs[i];
+        if (def->is_imported) {
+            continue;
+        }
+
         write_string("(export \"");
         write_string_length(def->name.start, def->name.length);
         write_string("\" (func $");
@@ -2820,6 +2904,10 @@ static void module() {
 }
 
 char *compile(const char *source) {
+#ifdef DEBUG_COMPILE_TIME
+    clock_t now = clock();
+#endif
+
     compiler_free();
 
     lexer_init(source);
@@ -2829,6 +2917,12 @@ char *compile(const char *source) {
 
     advance();
     module();
+
+#ifdef DEBUG_COMPILE_TIME
+    now = clock() - now;
+    printf("Compilation time: %.2f ms\n",
+           (double)now / CLOCKS_PER_SEC * 1000.0);
+#endif
 
     *compiler.current = '\0';
     return parser.had_error ? NULL : compiler.buffer;

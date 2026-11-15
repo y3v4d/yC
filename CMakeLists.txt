@@ -24,4 +24,8 @@ target_include_directories(app PRIVATE ${INC_DIR})
 target_include_directories(app PUBLIC wasmtime)
 target_link_libraries(app PUBLIC wasmtime)
 
-target_compile_options(app PRIVATE -Wall -Wextra -g)
+target_compile_options(app PRIVATE -Wall -Wextra)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(app PRIVATE -g)
+endif()

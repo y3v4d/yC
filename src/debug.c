@@ -168,6 +168,9 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_BAR:
         printf("TOKEN_BAR");
         break;
+    case TOKEN_IMPORT:
+        printf("TOKEN_IMPORT");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;
