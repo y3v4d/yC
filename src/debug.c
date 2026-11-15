@@ -162,6 +162,12 @@ static void print_token_type(tokentype_e type) {
     case TOKEN_ARROW:
         printf("TOKEN_ARROW");
         break;
+    case TOKEN_CARET:
+        printf("TOKEN_CARET");
+        break;
+    case TOKEN_BAR:
+        printf("TOKEN_BAR");
+        break;
     default:
         printf("UNKNOWN_TOKEN");
         break;

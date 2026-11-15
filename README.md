@@ -101,7 +101,6 @@ void main() {
 - Add support for unsigned integer types (u8, u16, u32, u64)
 - Add support for function pointers
 - Add support for else if
-- Add binary operation support
 - Add support for constructors/destructors for structs (C++ like)
 - Add support for modules and imports/exports
 - Add unit tests for the compiler

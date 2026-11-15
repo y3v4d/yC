@@ -319,26 +319,28 @@ token_t lexer_token() {
     case '\'':
         return token_character();
     case '>':
-        if (*lexer.current == '=') {
+        if (peek() == '=') {
             advance();
             return token_create(TOKEN_GREATER_EQUAL);
         } else {
             return token_create(TOKEN_GREATER);
         }
     case '<':
-        if (*lexer.current == '=') {
+        if (peek() == '=') {
             advance();
             return token_create(TOKEN_LESS_EQUAL);
         } else {
             return token_create(TOKEN_LESS);
         }
     case '|':
-        if (*lexer.current == '|') {
+        if (peek() == '|') {
             advance();
             return token_create(TOKEN_OR);
         } else {
-            return token_create(TOKEN_ERROR);
+            return token_create(TOKEN_BAR);
         }
+    case '^':
+        return token_create(TOKEN_CARET);
     default:
         return token_create(TOKEN_ERROR);
     }

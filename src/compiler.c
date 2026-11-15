@@ -157,11 +157,12 @@ typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
     PREC_AND,        // &&
+    PREC_BITWISE,    // & | ^
     PREC_EQUALITY,   // ==
     PREC_COMPARISON, // < > <= >=
     PREC_TERM,       // + -
     PREC_FACTOR,     // * /
-    PREC_UNARY,      // - & (unary)
+    PREC_UNARY,      // - &
     PREC_ACCESS,     // . (field access)
     PREC_CALL,       // ()
 } prec_e;
@@ -798,6 +799,21 @@ static void iwrite_mul(type_e type) {
     write_string(".mul\n");
 }
 
+static void iwrite_and(type_e type) {
+    write_type(type);
+    write_string(".and\n");
+}
+
+static void iwrite_or(type_e type) {
+    write_type(type);
+    write_string(".or\n");
+}
+
+static void iwrite_xor(type_e type) {
+    write_type(type);
+    write_string(".xor\n");
+}
+
 static void iwrite_div(type_e type) {
     write_type(type);
 
@@ -1310,6 +1326,60 @@ static void boolean() {
         break;
     default:
         error("Expected a boolean literal.");
+        break;
+    }
+}
+
+static void bitwise() {
+    tokentype_e op_type = parser.previous.type;
+    prec_e precedence = get_rule(op_type)->precedence;
+
+    stackv_t *a = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(a);
+
+    expression((prec_e)(precedence + 1));
+
+    stackv_t *b = &compiler.stack[compiler.stack_count - 1];
+    materialize_vstack(b);
+
+    compiler.stack_count -= 2;
+
+    if (!is_int_type(a->ctype) || !is_int_type(b->ctype)) {
+        error("Bitwise operator requires integer types.");
+        return;
+    }
+
+    if (a->ctype != b->ctype) {
+        if (isv_const(b->type)) {
+            b->as.c = cast_const(b->as.c, b->ctype, a->ctype);
+        } else {
+            if (!write_convert(b->ctype, a->ctype)) {
+                return;
+            }
+        }
+
+        b->ctype = a->ctype;
+    }
+
+    type_e target_type = a->ctype;
+
+    stackv_t *result = &compiler.stack[compiler.stack_count++];
+    result->type = VTYPE_STACK;
+    result->ctype = target_type;
+    result->offset = 0;
+
+    switch (op_type) {
+    case TOKEN_AMPERSAND:
+        iwrite_and(target_type);
+        break;
+    case TOKEN_BAR:
+        iwrite_or(target_type);
+        break;
+    case TOKEN_CARET:
+        iwrite_xor(target_type);
+        break;
+    default:
+        error("Expected a bitwise operator.");
         break;
     }
 }
@@ -1979,7 +2049,7 @@ parserule_t rules[] = {
     [TOKEN_STAR] = {dereference, binary, PREC_FACTOR},
     [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
     [TOKEN_IDENTIFIER] = {identifier, NULL, PREC_NONE},
-    [TOKEN_AMPERSAND] = {address, NULL, PREC_NONE},
+    [TOKEN_AMPERSAND] = {address, bitwise, PREC_BITWISE},
     [TOKEN_I32] = {NULL, NULL, PREC_NONE},
     [TOKEN_I64] = {NULL, NULL, PREC_NONE},
     [TOKEN_F32] = {NULL, NULL, PREC_NONE},
@@ -2014,7 +2084,10 @@ parserule_t rules[] = {
     [TOKEN_GREATER_EQUAL] = {NULL, equality, PREC_COMPARISON},
     [TOKEN_LESS_EQUAL] = {NULL, equality, PREC_COMPARISON},
     [TOKEN_AND] = {NULL, and, PREC_AND},
-    [TOKEN_OR] = {NULL, or, PREC_AND}};
+    [TOKEN_OR] = {NULL, or, PREC_AND},
+    [TOKEN_BAR] = {NULL, bitwise, PREC_BITWISE},
+    [TOKEN_CARET] = {NULL, bitwise, PREC_BITWISE},
+};
 
 static parserule_t *get_rule(tokentype_e type) { return &rules[type]; }
 

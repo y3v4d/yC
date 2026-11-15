@@ -1,6 +1,6 @@
 void main() {
-    i32 a = -0b00110;
-    i8 b = -0x81;
+    i32 a = 0b00110 & -0b00100;
+    i8 b = 0b1100 & 0b0111 | 0b10000;
 
     print a;
     print b;
