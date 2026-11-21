@@ -59,13 +59,13 @@ typedef struct {
     type_e type;
 
     bool is_absolute;
-    bool is_on_stack;
+    bool is_mem;
     bool is_global;
     bool is_param;
 
     int frame_index;
     int depth;
-} local_t;
+} sym_t;
 
 typedef struct {
     token_t name;
@@ -93,11 +93,12 @@ typedef struct {
 typedef enum {
     VTYPE_UNKNOWN = 0,
     VTYPE_CONST = 0b0001,
-    VTYPE_LOCAL = 0b0010,
+    VTYPE_SYM = 0b0010,
     VTYPE_STACK = 0b0100,
     VTYPE_LVALUE = 0b1000,
+    VTYPE_FIELD = 0b10000,
 
-    VTYPE_STORAGE = VTYPE_CONST | VTYPE_LOCAL | VTYPE_STACK
+    VTYPE_STORAGE = VTYPE_CONST | VTYPE_SYM | VTYPE_STACK
 } stackvtype_e;
 
 typedef struct {
@@ -108,20 +109,20 @@ typedef struct {
 
     union {
         const_u c;
-        local_t *local;
+        sym_t *sym;
     } as;
 } stackv_t;
 
 typedef struct {
     type_e type;
-    bool is_local;
+    bool is_sym;
     int offset;
     int size;
 
     union {
         const_u c;
         const char *string;
-        local_t *local;
+        sym_t *sym;
     } as;
 } const_t;
 
@@ -132,8 +133,8 @@ typedef struct {
     stackv_t stack[256];
     int stack_count;
 
-    local_t locals[256];
-    int local_count;
+    sym_t syms[256];
+    int sym_count;
 
     structdef_t structdefs[256];
     int structdef_count;
@@ -145,7 +146,7 @@ typedef struct {
     int const_count;
 
     int data_offset;
-    local_t *frame_ptr;
+    sym_t *frame_ptr;
     int sstack_count;
     int sstack_atleast;
 
@@ -185,11 +186,11 @@ static parserule_t *get_rule(tokentype_e type);
 static void declaration();
 
 static void compiler_init() {
-    compiler.frame_ptr = compiler.locals;
+    compiler.frame_ptr = compiler.syms;
 
     compiler.buffer = malloc(1024 * 1024);
     compiler.current = compiler.buffer;
-    compiler.local_count = 0;
+    compiler.sym_count = 0;
     compiler.stack_count = 0;
     compiler.scope_depth = 0;
     compiler.no_op = false;
@@ -310,10 +311,18 @@ static bool is_struct(type_e type) {
     return is_type(type, TYPE_STRUCT) && !is_pointer(type);
 }
 
-static bool isv_local(stackvtype_e type) { return (type & VTYPE_LOCAL); }
+static bool is_wasm_local(sym_t *sym) {
+    bool is_mem = sym->is_mem || sym->is_absolute;
+    bool is_param_struct = is_struct(sym->type) && sym->is_param;
+
+    return !is_mem && !is_param_struct && !sym->is_global;
+}
+
+static bool isv_sym(stackvtype_e type) { return (type & VTYPE_SYM); }
 static bool isv_const(stackvtype_e type) { return (type & VTYPE_CONST); }
 static bool isv_stack(stackvtype_e type) { return (type & VTYPE_STACK); }
 static bool isv_lvalue(stackvtype_e type) { return (type & VTYPE_LVALUE); }
+static bool isv_field(stackvtype_e type) { return (type & VTYPE_FIELD); }
 
 static int get_type_data(type_e type) { return (type & TYPE_DATA_MASK) >> 8; }
 
@@ -321,7 +330,7 @@ static int calculate_struct_size(structdef_t *structdef);
 
 static int get_type_size(type_e type) {
     if (is_pointer(type)) {
-        return 4; // Assuming pointer size is 4 bytes
+        return 4;
     }
 
     switch (type & TYPE_BASE_MASK) {
@@ -341,6 +350,8 @@ static int get_type_size(type_e type) {
         return 1;
     case TYPE_BOOL:
         return 1;
+    case TYPE_FUN:
+        return 0;
     case TYPE_STRUCT: {
         int structdef_index = get_type_data(type);
         structdef_t *structdef = &compiler.structdefs[structdef_index];
@@ -734,6 +745,16 @@ static void write_i32_const(int value) {
     write_string("\n");
 }
 
+static void write_i32_add(int value) {
+    if (value == 0) {
+        return;
+    }
+
+    write_string("i32.const ");
+    write_int(value);
+    write_string("\ni32.add\n");
+}
+
 static void iwrite_const(type_e type, const_u c) {
     write_type(type);
     write_string(".const ");
@@ -742,6 +763,11 @@ static void iwrite_const(type_e type, const_u c) {
 }
 
 static void iwrite_load(type_e type) {
+    if (is_type(type, TYPE_FUN)) {
+        error("Cannot load a function variable.");
+        return;
+    }
+
     if (is_pointer(type)) {
         write_string("i32.load\n");
         return;
@@ -761,30 +787,6 @@ static void iwrite_load(type_e type) {
         write_string(".load16_s\n");
     } else {
         write_string(".load\n");
-    }
-}
-
-static void iwrite_store(type_e type) {
-    if (is_pointer(type)) {
-        write_string("i32.store\n");
-        return;
-    }
-
-    if (is_struct(type)) {
-        write_i32_const(
-            calculate_struct_size(&compiler.structdefs[get_type_data(type)]));
-        write_string("memory.copy\n");
-    } else {
-        write_type(type);
-
-        if (is_type(type, TYPE_CHAR) || is_type(type, TYPE_I8) ||
-            is_type(type, TYPE_BOOL)) {
-            write_string(".store8\n");
-        } else if (is_type(type, TYPE_I16)) {
-            write_string(".store16\n");
-        } else {
-            write_string(".store\n");
-        }
     }
 }
 
@@ -890,6 +892,53 @@ static void iwrite_less_equal() { write_string("i32.le_s\n"); }
 static void iwrite_eqz() { write_string("i32.eqz\n"); }
 
 static void iwrite_return() { write_string("return\n"); }
+
+static void iwrite_global_get(token_t name) {
+    write_string("global.get $");
+    write_token(name);
+    write_string("\n");
+}
+
+static void iwrite_local_get(int i) {
+    write_string("local.get $");
+    write_int(i);
+    write_string("\n");
+}
+
+static void iwrite_local_set(int i) {
+    write_string("local.set $");
+    write_int(i);
+    write_string("\n");
+}
+
+static void iwrite_store(type_e type) {
+    if (is_type(type, TYPE_FUN)) {
+        error("Cannot store a function variable.");
+        return;
+    }
+
+    if (is_pointer(type)) {
+        write_string("i32.store\n");
+        return;
+    }
+
+    if (is_struct(type)) {
+        write_i32_const(
+            calculate_struct_size(&compiler.structdefs[get_type_data(type)]));
+        write_string("memory.copy\n");
+    } else {
+        write_type(type);
+
+        if (is_type(type, TYPE_CHAR) || is_type(type, TYPE_I8) ||
+            is_type(type, TYPE_BOOL)) {
+            write_string(".store8\n");
+        } else if (is_type(type, TYPE_I16)) {
+            write_string(".store16\n");
+        } else {
+            write_string(".store\n");
+        }
+    }
+}
 
 static bool write_convert(type_e from, type_e to) {
     if (is_pointer(from) && is_pointer(to)) {
@@ -1078,6 +1127,8 @@ static bool write_convert(type_e from, type_e to) {
     return true;
 }
 
+static void write_default_memory() { write_string("(memory $0 1)\n"); }
+
 static void write_print(type_e type) {
     if (is_pointer(type)) {
         write_string("call $print_i32\n");
@@ -1096,24 +1147,25 @@ static void write_print(type_e type) {
     }
 }
 
-static void write_address_local(local_t *local, int offset) {
-    if (local->is_global) { // for now, only wasm global is __heap_base which
-                            // value is an address so let's just get it
-        write_string("global.get $");
-        write_token(local->name);
-        write_string("\n");
-    } else if (local->is_absolute) {
-        write_i32_const(local->frame_index);
-    } else if (local->is_on_stack) {
-        write_string("local.get $fp\n");
-        offset += local->frame_index;
-        compiler.used_fp = true;
-    } else if (is_struct(local->type)) {
-        write_string("local.get $");
-        write_int(local - compiler.frame_ptr);
-        write_string("\n");
-    } else {
+static void write_address_sym(sym_t *sym, int offset) {
+    if (is_wasm_local(sym)) {
         return;
+    }
+
+    if (sym->is_absolute) {
+        write_i32_const(sym->frame_index + offset);
+        return;
+    }
+
+    if (sym->is_global) { // for now, only wasm global is __heap_base which
+                          // value is an address so let's just get it
+        iwrite_global_get(sym->name);
+    } else if (sym->is_mem) {
+        write_string("local.get $fp\n");
+        offset += sym->frame_index;
+        compiler.used_fp = true;
+    } else if (is_struct(sym->type)) { // param struct has address in wasm local
+        iwrite_local_get(sym - compiler.frame_ptr);
     }
 
     if (offset > 0) {
@@ -1122,90 +1174,72 @@ static void write_address_local(local_t *local, int offset) {
     }
 }
 
-static void write_load_local(local_t *local, type_e type) {
-    bool is_local_struct =
-        is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
-    bool is_op_struct = is_type(type, TYPE_STRUCT) && !is_pointer(type);
-
-    if (is_op_struct) {
+static void write_load_sym(sym_t *sym, type_e type) {
+    bool is_materializable = !is_struct(type) && !is_type(type, TYPE_FUN);
+    if (!is_materializable) {
         return;
     }
 
-    if (is_local_struct || local->is_on_stack || local->is_global) {
+    if (is_wasm_local(sym)) {
+        iwrite_local_get(sym - compiler.frame_ptr);
+    } else {
         iwrite_load(type);
-    } else {
-        write_string("local.get $");
-        write_int(local - compiler.frame_ptr);
-        write_string("\n");
     }
 }
 
-static void write_store_local(local_t *local, type_e type) {
-    bool is_local_struct =
-        is_type(local->type, TYPE_STRUCT) && !is_pointer(local->type);
-    bool is_op_struct = is_type(type, TYPE_STRUCT) && !is_pointer(type);
-
-    if (!local->is_on_stack && !is_local_struct && !is_op_struct) {
-        write_string("local.set $");
-        write_int(local - compiler.frame_ptr);
-        write_string("\n");
-    } else {
-        iwrite_store(type);
+// generate store for vstack value
+static void store_vstack(stackv_t *stackv) {
+    if (isv_sym(stackv->type)) {
+        sym_t *sym = stackv->as.sym;
+        if (is_wasm_local(sym)) {
+            iwrite_local_set(sym - compiler.frame_ptr);
+            return;
+        }
     }
-}
 
-static void write_default_memory() { write_string("(memory $0 1)\n"); }
+    iwrite_store(stackv->ctype);
+}
 
 // materialize vstack value on the wasm stack
-static void materialize_vstack(stackv_t *stackv) {
+static void load_vstack(stackv_t *stackv) {
     if (isv_lvalue(stackv->type)) {
-        if (isv_local(stackv->type)) {
-            write_address_local(stackv->as.local, stackv->offset);
-            write_load_local(stackv->as.local, stackv->ctype);
-
-            stackv->type &= ~VTYPE_STORAGE;
-            stackv->type |= VTYPE_STACK;
+        if (isv_sym(stackv->type)) {
+            write_address_sym(stackv->as.sym, stackv->offset);
+            write_load_sym(stackv->as.sym, stackv->ctype);
         } else if (isv_const(stackv->type)) {
-            iwrite_const(stackv->ctype, stackv->as.c);
+            write_i32_const(stackv->as.c.i32 + stackv->offset);
             iwrite_load(stackv->ctype);
         } else if (isv_stack(stackv->type)) {
-            if (stackv->offset > 0) {
-                iwrite_const(TYPE_I32, (const_u){.i32 = stackv->offset});
-                iwrite_add(TYPE_I32);
-            }
+            write_i32_add(stackv->offset);
 
-            // for struct types the address it the value, we just leave the
-            // address on the stack
-            if (!is_struct(stackv->ctype)) {
+            if (!is_struct(stackv->ctype) &&
+                !is_type(stackv->ctype, TYPE_FUN)) {
                 iwrite_load(stackv->ctype);
             }
         }
-
-        stackv->type &= ~VTYPE_LVALUE;
     } else {
         if (isv_const(stackv->type)) {
-            iwrite_const(stackv->ctype, stackv->as.c);
-
-            stackv->type &= ~VTYPE_STORAGE;
-            stackv->type |= VTYPE_STACK;
-        } else if (isv_local(stackv->type)) {
-            write_address_local(stackv->as.local, stackv->offset);
-        } else if (isv_stack(stackv->type)) {
-            if (stackv->offset > 0) {
-                iwrite_const(TYPE_I32, (const_u){.i32 = stackv->offset});
-                iwrite_add(TYPE_I32);
+            if (isv_field(stackv->type)) {
+                write_i32_const(stackv->as.c.i32 + stackv->offset);
+            } else {
+                iwrite_const(stackv->ctype, stackv->as.c);
             }
+        } else if (isv_sym(stackv->type)) {
+            if (is_wasm_local(stackv->as.sym)) {
+                return;
+            }
+
+            write_address_sym(stackv->as.sym, stackv->offset);
+        } else if (isv_stack(stackv->type)) {
+            write_i32_add(stackv->offset);
         }
     }
-}
 
-// store vstack value
-static void store_vstack(stackv_t *stackv) {
-    if (isv_stack(stackv->type)) {
-        iwrite_store(stackv->ctype);
-    } else {
-        write_store_local(stackv->as.local, stackv->ctype);
-    }
+    stackv->offset = 0;
+
+    stackv->type &= ~VTYPE_LVALUE;
+    stackv->type &= ~VTYPE_STORAGE;
+    stackv->type |= VTYPE_STACK;
 }
 
 static bool is_int_type(type_e type) {
@@ -1341,12 +1375,12 @@ static void bitwise() {
     prec_e precedence = get_rule(op_type)->precedence;
 
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(a);
+    load_vstack(a);
 
     expression((prec_e)(precedence + 1));
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(b);
+    load_vstack(b);
 
     compiler.stack_count -= 2;
 
@@ -1395,12 +1429,12 @@ static void binary() {
     prec_e precedence = get_rule(op_type)->precedence;
 
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(a);
+    load_vstack(a);
 
     expression((prec_e)(precedence + 1));
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(b);
+    load_vstack(b);
 
     compiler.stack_count -= 2;
 
@@ -1541,7 +1575,7 @@ static void unary() {
             return;
         }
 
-        materialize_vstack(&last_stackv);
+        load_vstack(&last_stackv);
 
         iwrite_const(last_stackv.ctype, c);
         iwrite_mul(last_stackv.ctype);
@@ -1556,7 +1590,7 @@ static void unary() {
             }
         }
 
-        materialize_vstack(&last_stackv);
+        load_vstack(&last_stackv);
         result->ctype = TYPE_BOOL;
 
         iwrite_negate();
@@ -1579,7 +1613,7 @@ static void group() {
             last_stackv->as.c =
                 cast_const(last_stackv->as.c, last_stackv->ctype, type);
         } else {
-            materialize_vstack(last_stackv);
+            load_vstack(last_stackv);
             write_convert(last_stackv->ctype, type);
         }
 
@@ -1606,7 +1640,8 @@ static void dot() {
     }
 
     if (is_pointer(last_stackv->ctype)) {
-        error("Cannot access fields of a pointer to a struct.");
+        error("Cannot access fields of a pointer to a struct with '.'. Try "
+              "'->'.");
         return;
     }
 
@@ -1631,17 +1666,21 @@ static void dot() {
         return;
     }
 
-    int field_index = field - structdef->fields;
-    int byte_offset = 0;
-    for (int j = 0; j < field_index; j++) {
-        fielddef_t *prev_field = &structdef->fields[j];
-        int size = get_type_size(prev_field->type);
-
-        byte_offset += size;
-    }
-
+    last_stackv->type |= VTYPE_FIELD;
     last_stackv->ctype = field->type;
-    last_stackv->offset += byte_offset;
+
+    if (!is_type(last_stackv->ctype, TYPE_FUN)) {
+        int field_index = field - structdef->fields;
+        int byte_offset = 0;
+        for (int j = 0; j < field_index; j++) {
+            fielddef_t *prev_field = &structdef->fields[j];
+            int size = get_type_size(prev_field->type);
+
+            byte_offset += size;
+        }
+
+        last_stackv->offset += byte_offset;
+    }
 }
 
 static void arrow() {
@@ -1652,7 +1691,7 @@ static void arrow() {
     }
 
     if (isv_lvalue(last_stackv->type)) {
-        materialize_vstack(last_stackv);
+        load_vstack(last_stackv);
     }
 
     last_stackv->ctype &= ~TYPE_POINTER_FLAG;
@@ -1663,11 +1702,6 @@ static void arrow() {
 
 static void call() {
     stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
-    if (!isv_local(last_stackv->type)) {
-        error("Cannot call a non-local variable.");
-        return;
-    }
-
     if (!is_type(last_stackv->ctype, TYPE_FUN)) {
         error("Cannot call a non-function variable.");
         return;
@@ -1687,6 +1721,12 @@ static void call() {
 
     int current_param = 0;
     int additional_stack = 0;
+
+    if (isv_field(last_stackv->type)) {
+        load_vstack(last_stackv);
+        current_param++;
+    }
+
     while (!check(TOKEN_RIGHT_PAREN) && parser.current.type != TOKEN_EOF) {
         if (current_param >= fundef->param_count) {
             error("Too many arguments in function call.");
@@ -1715,7 +1755,7 @@ static void call() {
         }
 
         stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
-        materialize_vstack(last_stackv);
+        load_vstack(last_stackv);
 
         if (last_stackv->ctype != fielddef->type) {
             if (!write_convert(last_stackv->ctype, fielddef->type)) {
@@ -1754,21 +1794,21 @@ static void call() {
         }
     }
 
-    iwrite_call(last_stackv->as.local->name);
+    iwrite_call(fundef->name);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function call.");
 }
 
 static void identifier() {
-    local_t *found = NULL;
-    for (int i = compiler.local_count - 1; i >= 0; --i) {
-        if (compiler.locals[i].depth > compiler.scope_depth) {
+    sym_t *found = NULL;
+    for (int i = compiler.sym_count - 1; i >= 0; --i) {
+        if (compiler.syms[i].depth > compiler.scope_depth) {
             continue; // Skip locals that are out of scope
         }
 
-        if (compiler.locals[i].name.length == parser.previous.length &&
-            strncmp(compiler.locals[i].name.start, parser.previous.start,
+        if (compiler.syms[i].name.length == parser.previous.length &&
+            strncmp(compiler.syms[i].name.start, parser.previous.start,
                     parser.previous.length) == 0) {
-            found = &compiler.locals[i];
+            found = &compiler.syms[i];
             break;
         }
     }
@@ -1779,10 +1819,10 @@ static void identifier() {
     }
 
     stackv_t *stackv = &compiler.stack[compiler.stack_count++];
-    stackv->type = VTYPE_LOCAL | VTYPE_LVALUE;
+    stackv->type = VTYPE_SYM | VTYPE_LVALUE;
     stackv->ctype = found->type;
     stackv->offset = 0;
-    stackv->as.local = found;
+    stackv->as.sym = found;
 }
 
 static void begin_scope() { compiler.scope_depth++; }
@@ -1806,9 +1846,9 @@ static void address() {
         return;
     }
 
-    if (isv_local(last_stackv->type)) {
-        local_t *local = last_stackv->as.local;
-        if (!local->is_on_stack && !is_pointer(local->type)) {
+    if (isv_sym(last_stackv->type)) {
+        sym_t *sym = last_stackv->as.sym;
+        if (!sym->is_mem && !is_pointer(sym->type)) {
             error(
                 "Cannot take the address of a local variable that is not on "
                 "the "
@@ -1831,7 +1871,7 @@ static void dereference() {
     }
 
     if (isv_lvalue(last_stackv->type)) {
-        materialize_vstack(last_stackv);
+        load_vstack(last_stackv);
     }
 
     last_stackv->ctype &= ~TYPE_POINTER_FLAG;
@@ -1846,7 +1886,7 @@ static void assignment() {
     }
 
     vtarget->type &= ~VTYPE_LVALUE;
-    materialize_vstack(vtarget);
+    load_vstack(vtarget);
 
     expression(PREC_ASSIGNMENT);
 
@@ -1854,17 +1894,22 @@ static void assignment() {
     compiler.stack_count -= 2; // Pop both the lvalue and the value
 
     if (vvalue->ctype != vtarget->ctype) {
-        if (isv_const(vvalue->type)) {
+        if (isv_const(vvalue->type) && !isv_field(vvalue->type)) {
             vvalue->as.c =
                 cast_const(vvalue->as.c, vvalue->ctype, vtarget->ctype);
             vvalue->ctype = vtarget->ctype;
         }
     }
 
-    materialize_vstack(vvalue);
+    load_vstack(vvalue);
 
     if (vvalue->ctype != vtarget->ctype) {
-        write_convert(vvalue->ctype, vtarget->ctype);
+        if (!write_convert(vvalue->ctype, vtarget->ctype)) {
+            error("Failed to convert value type for assignment.");
+            return;
+        }
+
+        vvalue->ctype = vtarget->ctype;
     }
 
     store_vstack(vtarget);
@@ -1914,7 +1959,7 @@ static void string() {
 
     const_t *string_const = &compiler.consts[compiler.const_count++];
 
-    string_const->is_local = false;
+    string_const->is_sym = false;
     string_const->type = TYPE_CHAR | TYPE_POINTER_FLAG;
     string_const->offset = compiler.data_offset;
     string_const->size = parser.previous.length - 2;
@@ -1932,7 +1977,7 @@ static void bracket() {
         return;
     }
 
-    materialize_vstack(last_stackv);
+    load_vstack(last_stackv);
 
     expression(PREC_ASSIGNMENT);
     consume(TOKEN_RBRACKET, "Expected ']' after index expression.");
@@ -1943,7 +1988,7 @@ static void bracket() {
         return;
     }
 
-    materialize_vstack(index_stackv);
+    load_vstack(index_stackv);
     write_i32_const(get_type_size(element_type & ~TYPE_POINTER_FLAG));
     iwrite_mul(TYPE_I32);
     iwrite_add(TYPE_I32);
@@ -1982,14 +2027,14 @@ static void equality() {
     tokentype_e op_type = parser.previous.type;
 
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(a);
+    load_vstack(a);
 
     expression(PREC_EQUALITY + 1);
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
     compiler.stack_count -= 2;
 
-    materialize_vstack(b);
+    load_vstack(b);
 
     stackv_t *result = &compiler.stack[compiler.stack_count++];
     result->type = VTYPE_STACK;
@@ -2023,13 +2068,13 @@ static void equality() {
 
 static void and() {
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(a);
+    load_vstack(a);
 
     iwrite_ifr(TYPE_BOOL);
     expression(PREC_AND + 1);
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(b);
+    load_vstack(b);
     iwrite_end();
 
     iwrite_else();
@@ -2048,7 +2093,7 @@ static void and() {
 
 static void or() {
     stackv_t *a = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(a);
+    load_vstack(a);
 
     iwrite_ifr(TYPE_BOOL);
     iwrite_const(TYPE_BOOL, (const_u){.i32 = 1});
@@ -2059,7 +2104,7 @@ static void or() {
     expression(PREC_AND + 1);
 
     stackv_t *b = &compiler.stack[compiler.stack_count - 1];
-    materialize_vstack(b);
+    load_vstack(b);
 
     iwrite_end();
     iwrite_end();
@@ -2081,6 +2126,7 @@ parserule_t rules[] = {
     [TOKEN_STAR] = {dereference, binary, PREC_FACTOR},
     [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
     [TOKEN_IDENTIFIER] = {identifier, NULL, PREC_NONE},
+    [TOKEN_SELF] = {identifier, NULL, PREC_NONE},
     [TOKEN_AMPERSAND] = {address, bitwise, PREC_BITWISE},
     [TOKEN_I32] = {NULL, NULL, PREC_NONE},
     [TOKEN_I64] = {NULL, NULL, PREC_NONE},
@@ -2130,7 +2176,7 @@ static void print_statement() {
     stackv_t *last_stackv = &compiler.stack[compiler.stack_count - 1];
     compiler.stack_count--; // Pop the last stack value
 
-    materialize_vstack(last_stackv);
+    load_vstack(last_stackv);
     write_print(last_stackv->ctype);
 }
 
@@ -2139,7 +2185,7 @@ static void if_statement() {
     expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
 
-    materialize_vstack(&compiler.stack[--compiler.stack_count]);
+    load_vstack(&compiler.stack[--compiler.stack_count]);
 
     iwrite_if();
 
@@ -2151,18 +2197,50 @@ static void if_statement() {
 
     iwrite_end();
 
-    if (match(TOKEN_ELSE)) {
-        consume(TOKEN_LEFT_BRACE, "Expected '{' after 'else'.");
+    bool had_else = false;
+    int depth = 0;
+
+    while (match(TOKEN_ELSE)) {
+        if (had_else) {
+            error("Condition clauses after 'else' are not allowed.");
+            return;
+        }
+
+        bool is_elseif = false;
         iwrite_else();
+
+        if (match(TOKEN_IF)) {
+            is_elseif = true;
+
+            consume(TOKEN_LEFT_PAREN, "Expected '(' after 'else if'.");
+            expression(PREC_ASSIGNMENT);
+            consume(TOKEN_RIGHT_PAREN,
+                    "Expected ')' after 'else if' condition.");
+
+            load_vstack(&compiler.stack[--compiler.stack_count]);
+            iwrite_if();
+
+            depth++; // for if
+        } else {
+            had_else = true;
+        }
+
+        consume(TOKEN_LEFT_BRACE, "Expected '{' after 'else if' condition.");
 
         begin_scope();
         block();
         end_scope();
 
-        iwrite_end();
+        if (is_elseif) {
+            iwrite_end(); // closes then
+        }
+
+        depth++; // for else or elseif
     }
 
-    iwrite_end();
+    for (int i = 0; i <= depth; i++) {
+        iwrite_end();
+    }
 }
 
 static void while_statement() {
@@ -2176,7 +2254,7 @@ static void while_statement() {
     expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after condition.");
 
-    materialize_vstack(&compiler.stack[--compiler.stack_count]);
+    load_vstack(&compiler.stack[--compiler.stack_count]);
 
     iwrite_negate();
     iwrite_jmpif(block_label);
@@ -2213,7 +2291,7 @@ static void for_statement() {
     }
 
     stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
-    materialize_vstack(last_stackv);
+    load_vstack(last_stackv);
 
     iwrite_negate();
     iwrite_jmpif(block_label);
@@ -2262,31 +2340,28 @@ static void named_var(type_e type, bool is_mem) {
     token_t name = parser.previous;
     bool is_top = compiler.scope_depth == 0;
 
-    local_t *local = &compiler.locals[compiler.local_count];
-    local->name = name;
-    local->type = type;
-    local->is_on_stack =
-        is_mem || (is_type(type, TYPE_STRUCT) && !is_pointer(type));
-    local->is_param = false;
-    local->is_absolute = false;
-    local->is_global = false;
-    local->depth = compiler.scope_depth;
+    sym_t *sym = &compiler.syms[compiler.sym_count++];
+    sym->name = name;
+    sym->type = type;
+    sym->is_mem = is_mem || is_struct(type);
+    sym->is_param = false;
+    sym->is_absolute = false;
+    sym->is_global = false;
+    sym->depth = compiler.scope_depth;
 
-    if (local->is_on_stack && !is_top) {
-        local->frame_index = compiler.sstack_count;
+    if (sym->is_mem && !is_top) {
+        sym->frame_index = compiler.sstack_count;
         compiler.sstack_count += get_type_size(type);
     }
 
-    compiler.local_count++;
-
     if (is_top) {
-        local->is_absolute = true;
-        local->is_on_stack = true;
-        local->frame_index = 16384 + compiler.data_offset;
+        sym->is_absolute = true;
+        sym->is_mem = true;
+        sym->frame_index = 16384 + compiler.data_offset;
 
         const_t *global_const = &compiler.consts[compiler.const_count++];
         global_const->type = type;
-        global_const->is_local = false;
+        global_const->is_sym = false;
         global_const->offset = compiler.data_offset;
         global_const->size = get_type_size(type);
 
@@ -2303,9 +2378,9 @@ static void named_var(type_e type, bool is_mem) {
                 return;
             }
 
-            if (isv_local(last_stackv->type)) {
-                global_const->is_local = true;
-                global_const->as.local = last_stackv->as.local;
+            if (isv_sym(last_stackv->type)) {
+                global_const->is_sym = true;
+                global_const->as.sym = last_stackv->as.sym;
             } else if (isv_const(last_stackv->type)) {
                 if (last_stackv->ctype != type) {
                     global_const->as.c =
@@ -2324,48 +2399,52 @@ static void named_var(type_e type, bool is_mem) {
     }
 
     if (match(TOKEN_EQUAL)) {
-        write_address_local(local, 0);
+        stackv_t *vtarget = &compiler.stack[compiler.stack_count++];
+        vtarget->type = VTYPE_SYM | VTYPE_LVALUE;
+        vtarget->ctype = sym->type;
 
-        expression(PREC_ASSIGNMENT);
+        vtarget->offset = 0;
+        vtarget->as.sym = sym;
 
-        stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
-
-        if (local->type != last_stackv->ctype) {
-            if (isv_const(last_stackv->type)) {
-                last_stackv->as.c = cast_const(last_stackv->as.c,
-                                               last_stackv->ctype, local->type);
-                last_stackv->ctype = local->type;
-            }
-        }
-
-        materialize_vstack(last_stackv);
-        if (local->type != last_stackv->ctype) {
-            if (!isv_const(last_stackv->type)) {
-                write_convert(last_stackv->ctype, local->type);
-            }
-        }
-
-        write_store_local(local, local->type);
+        assignment();
     }
 }
 
-static void function(type_e return_type) {
+static token_t create_struct_func_name(token_t struct_name, token_t func_name) {
+    int total_length = struct_name.length + 1 + func_name.length;
+    char *combined = (char *)malloc(total_length + 1);
+    if (!combined) {
+        error("Memory allocation failed for struct function name.");
+        return (token_t){.start = NULL, .length = 0};
+    }
+
+    memcpy(combined, struct_name.start, struct_name.length);
+    combined[struct_name.length] = '_';
+    memcpy(combined + struct_name.length + 1, func_name.start,
+           func_name.length);
+    combined[total_length] = '\0';
+
+    return (token_t){.start = combined, .length = total_length};
+}
+
+static void function(token_t name, type_e return_type, structdef_t *structdef) {
     if (compiler.scope_depth > 0) {
         error("Functions cannot be declared inside other functions or blocks.");
         return;
     }
 
-    token_t name = parser.previous;
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
 
-    local_t *local = &compiler.locals[compiler.local_count++];
-    local->name = name;
-    local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
-    local->is_on_stack = false;
-    local->is_absolute = false;
-    local->is_global = false;
-    local->is_param = false;
-    local->depth = compiler.scope_depth;
+    if (structdef == NULL) {
+        sym_t *sym = &compiler.syms[compiler.sym_count++];
+        sym->name = name;
+        sym->type = create_type(TYPE_FUN, false, compiler.fundef_count);
+        sym->is_mem = false;
+        sym->is_absolute = false;
+        sym->is_global = false;
+        sym->is_param = false;
+        sym->depth = compiler.scope_depth;
+    }
 
     if (!compiler.no_op) {
         write_string("(func $");
@@ -2377,16 +2456,31 @@ static void function(type_e return_type) {
     compiler.sstack_atleast = 0;
     compiler.used_fp = false;
 
-    int frame_ptr = compiler.local_count;
-    local_t *last_frame_ptr = compiler.frame_ptr;
+    int frame_ptr = compiler.sym_count;
+    sym_t *last_frame_ptr = compiler.frame_ptr;
 
-    compiler.frame_ptr = &compiler.locals[frame_ptr];
+    compiler.frame_ptr = &compiler.syms[frame_ptr];
 
     fundef_t *fundef = &compiler.fundefs[compiler.fundef_count++];
     fundef->name = name;
     fundef->return_type = return_type;
     fundef->param_count = 0;
     fundef->is_imported = false;
+
+    if (structdef != NULL) {
+        write_string(
+            "(param $0 i32)"); // Add 'self' parameter for struct methods
+
+        sym_t *self_sym = &compiler.syms[compiler.sym_count++];
+        self_sym->name = (token_t){.start = "self", .length = 4};
+        self_sym->type =
+            create_type(TYPE_STRUCT, true, structdef - compiler.structdefs);
+        self_sym->is_mem = false;
+        self_sym->is_absolute = false;
+        self_sym->is_global = false;
+        self_sym->is_param = true;
+        self_sym->depth = compiler.scope_depth;
+    }
 
     // Parse parameters
     while (!check(TOKEN_RIGHT_PAREN) && !check(TOKEN_EOF)) {
@@ -2403,27 +2497,25 @@ static void function(type_e return_type) {
 
             if (!compiler.no_op) {
                 write_string("(param $");
-                write_int(compiler.local_count - frame_ptr);
+                write_int(compiler.sym_count - frame_ptr);
                 write_string(" ");
                 write_type(param_type);
                 write_string(")");
             }
 
-            local_t *local = &compiler.locals[compiler.local_count];
-            local->name = param_name;
-            local->type = param_type;
-            local->is_on_stack = is_mem;
-            local->is_absolute = false;
-            local->is_global = false;
-            local->is_param = true;
-            local->depth = compiler.scope_depth;
+            sym_t *sym = &compiler.syms[compiler.sym_count++];
+            sym->name = param_name;
+            sym->type = param_type;
+            sym->is_mem = is_mem;
+            sym->is_absolute = false;
+            sym->is_global = false;
+            sym->is_param = true;
+            sym->depth = compiler.scope_depth;
 
             if (is_mem) {
-                local->frame_index = compiler.sstack_count;
+                sym->frame_index = compiler.sstack_count;
                 compiler.sstack_count += get_type_size(param_type);
             }
-
-            compiler.local_count++;
         } else {
             error("Expected a type for parameter.");
         }
@@ -2433,15 +2525,15 @@ static void function(type_e return_type) {
         }
     }
 
-    fundef->param_count = compiler.local_count - frame_ptr;
+    fundef->param_count = compiler.sym_count - frame_ptr;
     fundef->params =
         (fielddef_t *)malloc(sizeof(fielddef_t) * fundef->param_count);
 
     for (int i = 0; i < fundef->param_count; i++) {
-        local_t *param_local = &compiler.locals[frame_ptr + i];
+        sym_t *param_sym = &compiler.syms[frame_ptr + i];
 
-        fundef->params[i].name = param_local->name;
-        fundef->params[i].type = param_local->type;
+        fundef->params[i].name = param_sym->name;
+        fundef->params[i].type = param_sym->type;
     }
 
     if (!compiler.no_op) {
@@ -2486,14 +2578,14 @@ static void function(type_e return_type) {
         write_string("(local $fp i32)\n");
     }
 
-    for (int i = frame_ptr; i < compiler.local_count; i++) {
-        local_t *local = &compiler.locals[i];
+    for (int i = frame_ptr; i < compiler.sym_count; i++) {
+        sym_t *sym = &compiler.syms[i];
 
-        if (!local->is_on_stack && !local->is_param) {
+        if (!sym->is_mem && !sym->is_param) {
             write_string("(local $");
             write_int(i - frame_ptr);
             write_string(" ");
-            write_type(local->type);
+            write_type(sym->type);
             write_string(")\n");
         }
     }
@@ -2506,16 +2598,16 @@ static void function(type_e return_type) {
         write_string("global.set $__sp\n");
     }
 
-    for (int i = compiler.local_count - 1; i >= frame_ptr; --i) {
-        local_t *local = &compiler.locals[i];
-        if (local->is_on_stack && local->is_param) {
+    for (int i = compiler.sym_count - 1; i >= frame_ptr; --i) {
+        sym_t *sym = &compiler.syms[i];
+        if (sym->is_mem && sym->is_param) {
             write_string("local.get $fp\n");
-            write_i32_const(local->frame_index);
+            write_i32_const(sym->frame_index);
             write_string("i32.add\n");
             write_string("local.get $");
             write_int(i - frame_ptr);
             write_string("\n");
-            write_type(local->type);
+            write_type(sym->type);
             write_string(".store\n");
         }
     }
@@ -2532,7 +2624,7 @@ static void function(type_e return_type) {
         write_string("global.set $__sp\n");
     }
 
-    compiler.local_count = frame_ptr;
+    compiler.sym_count = frame_ptr;
     compiler.frame_ptr = last_frame_ptr;
     compiler.used_fp = false;
 
@@ -2553,7 +2645,7 @@ static void typed_declaration(type_e decl_type, bool is_mem) {
             return;
         }
 
-        function(decl_type);
+        function(parser.previous, decl_type, NULL);
     } else {
         named_var(decl_type, is_mem);
         consume(TOKEN_SEMICOLON, "Expected ';' after declaration.");
@@ -2574,6 +2666,11 @@ static void struct_declaration() {
     if (compiler.scope_depth > 0) {
         error("Structs cannot be declared inside functions or blocks.");
         return;
+    }
+
+    if (!compiler.wrote_default_memory) {
+        write_default_memory();
+        compiler.wrote_default_memory = true;
     }
 
     consume(TOKEN_IDENTIFIER, "Expected struct name.");
@@ -2602,10 +2699,18 @@ static void struct_declaration() {
             }
 
             token_t field_name = parser.previous;
-
             fielddef_t *field = &structdef->fields[structdef->field_count++];
             field->name = field_name;
             field->type = field_type;
+
+            if (check(TOKEN_LEFT_PAREN)) {
+                field->type =
+                    create_type(TYPE_FUN, false, compiler.fundef_count);
+
+                function(create_struct_func_name(struct_name, field_name),
+                         field_type, structdef);
+                continue;
+            }
         } else {
             error("Expected a type for struct field.");
         }
@@ -2631,21 +2736,21 @@ static void return_statement() {
     consume(TOKEN_SEMICOLON, "Expected ';' after return statement.");
 
     stackv_t *last_stackv = &compiler.stack[--compiler.stack_count];
-    materialize_vstack(last_stackv);
+    load_vstack(last_stackv);
 }
 
 static void add_import_fn(const char *module, int module_len, const char *name,
                           int name_len, type_e return_type, int param_count,
                           type_e *param_types) {
-    local_t *local = &compiler.locals[compiler.local_count++];
-    local->name.start = name;
-    local->name.length = name_len;
-    local->type = create_type(TYPE_FUN, false, compiler.fundef_count);
-    local->is_on_stack = false;
-    local->is_absolute = false;
-    local->is_global = false;
-    local->is_param = false;
-    local->depth = 0;
+    sym_t *sym = &compiler.syms[compiler.sym_count++];
+    sym->name.start = name;
+    sym->name.length = name_len;
+    sym->type = create_type(TYPE_FUN, false, compiler.fundef_count);
+    sym->is_mem = false;
+    sym->is_absolute = false;
+    sym->is_global = false;
+    sym->is_param = false;
+    sym->depth = 0;
 
     fundef_t *fundef = &compiler.fundefs[compiler.fundef_count++];
     fundef->name.start = name;
@@ -2773,21 +2878,21 @@ static void declaration() {
 static void module() {
     write_string("(module\n");
 
-    local_t *heap_base_local = &compiler.locals[compiler.local_count++];
-    heap_base_local->name.start = "__heap_base";
-    heap_base_local->name.length = 11;
-    heap_base_local->type = TYPE_CHAR | TYPE_POINTER_FLAG;
-    heap_base_local->is_on_stack = false;
-    heap_base_local->is_absolute = false;
-    heap_base_local->is_param = false;
-    heap_base_local->is_global = true;
-    heap_base_local->depth = 0;
+    sym_t *heap_base_sym = &compiler.syms[compiler.sym_count++];
+    heap_base_sym->name.start = "__heap_base";
+    heap_base_sym->name.length = 11;
+    heap_base_sym->type = TYPE_CHAR | TYPE_POINTER_FLAG;
+    heap_base_sym->is_mem = false;
+    heap_base_sym->is_absolute = false;
+    heap_base_sym->is_param = false;
+    heap_base_sym->is_global = true;
+    heap_base_sym->depth = 0;
 
     while (parser.current.type != TOKEN_EOF) {
         declaration();
     }
 
-    heap_base_local->frame_index = 16384 + compiler.data_offset;
+    heap_base_sym->frame_index = 16384 + compiler.data_offset;
 
     for (int i = 0; i < compiler.const_count; i++) {
         const_t *const_value = &compiler.consts[i];
@@ -2815,9 +2920,8 @@ static void module() {
 
             write_string("\\00");
         } else if (is_pointer(const_value->type)) {
-            int offset = const_value->is_local
-                             ? const_value->as.local->frame_index
-                             : const_value->as.c.i32;
+            int offset = const_value->is_sym ? const_value->as.sym->frame_index
+                                             : const_value->as.c.i32;
 
             for (int j = 0; j < 4; ++j) {
                 unsigned char byte = (offset >> (j * 8)) & 0xFF;
@@ -2883,7 +2987,7 @@ static void module() {
 
     write_string("(global $__sp (mut i32) (i32.const 16384))\n");
     write_string("(global $__heap_base i32 (i32.const ");
-    write_int(heap_base_local->frame_index);
+    write_int(heap_base_sym->frame_index);
     write_string("))\n");
 
     write_string("(export \"memory\" (memory $0))\n");

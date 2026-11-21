@@ -1,0 +1,17 @@
+import "core" {
+    void puts(i8* s);
+}
+
+void main() {
+    if(false) {
+        puts("if");
+    } else if(false) {
+        if(true) {
+            puts("elseif");
+        }
+    } else if(true) {
+        puts("elseelseif");
+    } else {
+        puts("else");
+    }
+}

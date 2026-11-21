@@ -4,13 +4,69 @@ import "core" {
     void puts(i8* s);
 }
 
-void main() {
-    i8 a = 'a';
-    i8 b = '\n';
-    i8* text = "Hello!\n";
+struct iinner_t {
+    i32 a;
 
-    putc(a);
-    puti(b);
-    puts(text);
-    puti(text[6]);
+    void test() {
+        puts("hello from iinner_t\n");
+    }
+}
+
+struct inner_t {
+    iinner_t* b;
+
+    void test() {
+        puts("hello world inner_t\n");
+    }
+}
+
+struct point_t {
+    i32 x;
+    i32 y;
+
+    inner_t* inner;
+    inner_t inner2;
+
+    void init(i32 x, i32 y) {
+        self->x = x;
+        self->y = y;
+
+        self->inner = &__heap_base;
+        self->inner->b = &__heap_base + 64;
+    }
+
+    void test() {
+        puts("point: ");
+        puti(self->x);
+        putc(' ');
+        puti(self->y);
+        putc('\n');
+
+        self->inner->test();
+    }
+}
+
+/*struct test_t {
+    i32 a;
+    i64 b;
+}*/
+
+void main() {
+    point_t p;
+    p.init(5, 10);
+
+    point_t* t = &p;
+
+    //test_t* t = (test_t*)1024;
+
+    //i64 a = ((test_t*)1024)->a;
+    //i32 b = t->b;
+    //i32 a;
+    //a = 5;
+
+    p.test();
+    p.y = 20;
+    t->test();
+
+    p.inner->b->test();
 }

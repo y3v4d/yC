@@ -187,6 +187,8 @@ static tokentype_e identifier_type() {
                 return check_keyword(2, 4, "ruct", TOKEN_STRUCT);
             case 'i':
                 return check_keyword(2, 4, "zeof", TOKEN_SIZEOF);
+            case 'e':
+                return check_keyword(2, 2, "lf", TOKEN_SELF);
             }
         }
 

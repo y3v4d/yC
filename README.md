@@ -11,10 +11,9 @@ A (bit bigger) list of features that yC currently supports:
 - **Hand-written Parser** - Pratt-parser that generates the WAT output directly (without an AST) in a single pass 
 - **Static typing** - yC is a statically typed language, meaning that types are checked at compile time. Current primitive types are: i8, i16, i32, i64, f32, f64, bool, void (only as a return type for functions), char. Language also supports user-defined types (struct) and pointers, as well as implicit and explicit type casting.
 - **Functions** - can be defined and called with parameters
-- **Structs** - user-defined types that can contain multiple fields
 - **Pointers** - variables that store the memory address of another variable. To declare a pointer, use the `*` symbol before the variable name. To dereference a pointer, use the `*` symbol before the pointer variable name. To get the address of a variable, use the `&` symbol before the variable name. There is also support for `->` operator which is a shortcut for dereferncing a struct pointer and accessing it's field at the same time (ex. `obj->a` is the same as `(*obj).a`).
-- **Flow control** - if/else statements, for and while loops, and (&&) opertion, or (||) operation, not (!) operation, comparison operators (==, !=, <, >, <=, >=)
-- **Structs** - user-defined types that can contain multiple fields. Structs as function parameters currently are supported to be passed by a value (utilizing similar copy mechanism C uses), or by a pointer.
+- **Flow control** - if/else if/else statements, for and while loops, and (&&) opertion, or (||) operation, not (!) operation, comparison operators (==, !=, <, >, <=, >=)
+- **Structs** - user-defined types that can contain multiple fields and functions. Structs as function parameters currently are supported to be passed by a value (utilizing similar copy mechanism C uses), or by a pointer.
 - **Arrays** - C-like arrays, where every pointer is an array of elements of the same type, accessible through pointer arithmetic, ex. `*(p + 1)` or bracket notation `p[1]`. There are no bounds checks or fixed sized arrays (yet).
 - **Shadow stack** - stack implemented in WebAssembly linear memory, used for storing variables. By default, all function-local primitive type variables are always declared as wasm locals, meaning they can't be addressed. To be able to address a variable, a `mem` prefix can be used, which forces a variable to live on the shadow stack instead. This is done purely because of the single-pass nature of the compiler. Currently, the allocated memory for shadow stack is 4kb and is not configurable. In the future I plan to add support for specifying the size of the shadow stack on compilation time.
 - **Variable hoisting** - variables can be declared anywhere in the scope, but they will be always hoisted to the top of the running function. This is done due to necessity because WebAssembly local variables must be declared at the top of the function. Compiler should disallow using variables declared in an inner scope (like if statement) in an outer scope, but that's not fully implemented yet and trying to use such variable might result in undefined behavior.
@@ -76,12 +75,12 @@ import "core" {
 struct point_t {
     i32 x;
     i64 y;
-};
 
-void print_point(point_t* point) {
-    puti(point->a);
-    puti(point->b);
-}
+    void print() {
+        puti(self->x);
+        puti(self->y);
+    }
+};
 
 void main() {
     bool is_valid = true;
@@ -94,7 +93,7 @@ void main() {
     }
     
     p.y = 20;
-    print_point(&p);
+    p.print();
 }
 ```
 
@@ -103,10 +102,10 @@ void main() {
 - Add better error handling and reporting
 - Add support for unsigned integer types (u8, u16, u32, u64)
 - Add support for function pointers
-- Add support for else if
 - Add support for constructors/destructors for structs (C++ like)
 - Add support for file includes and function exports
 - Add unit tests for the compiler
+- Add compile time binary operations for constant values
 - Add a standard library
 - Self-hosting
 
